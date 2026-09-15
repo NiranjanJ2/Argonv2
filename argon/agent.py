@@ -86,7 +86,12 @@ class Agent:
                 out.text = reply.text
                 # Interactive: the text is the answer. Background: it was
                 # thinking, and thinking is not delivered.
-                if reply.text and not background:
+                #
+                # `not out.spoke` matters. A model that calls `say` and then
+                # also signs off with the same sentence would otherwise send it
+                # twice — which is what happened the first time Discord
+                # delivery started working.
+                if reply.text and not background and not out.spoke:
                     self.say(reply.text)
                     out.spoke = True
                 return out
@@ -199,8 +204,17 @@ def _selftest() -> None:
         scripted.append(provider.Reply(text="nothing due tomorrow"))
         out = agent.receive("what's due?")
         assert out.spoke is True and delivered[-1] == "nothing due tomorrow"
+
         kinds = [e.kind for e in t.window(2)]
         assert kinds.count("message_in") == 1 and kinds.count("message_out") == 2
+
+        # Calling say and then signing off with text must not send twice.
+        scripted.append(provider.Reply(tool_calls=[
+            {"id": "9", "function": {"name": "say", "arguments": '{"text":"only once"}'}}]))
+        scripted.append(provider.Reply(text="only once"))
+        count = len(delivered)
+        out = agent.receive("say it")
+        assert delivered[count:] == ["only once"], delivered[count:]
 
         # A provider failure never reaches him.
         def boom(*a, **k):
