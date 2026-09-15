@@ -1,0 +1,21 @@
+[Unit]
+Description=Argon v2
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+WorkingDirectory=/home/agentneon/argonv2
+ExecStart=/home/agentneon/argonv2/.venv/bin/argon gateway
+Restart=always
+RestartSec=10
+
+# State lives here and nowhere else; the checkout is read-only to the service.
+Environment=ARGON_HOME=/home/agentneon/.argon2
+ReadWritePaths=/home/agentneon/.argon2
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target
