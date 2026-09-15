@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     priority   TEXT NOT NULL DEFAULT 'normal',
     done       INTEGER NOT NULL DEFAULT 0,
     done_at    TEXT,
+    started_at TEXT,
     source     TEXT NOT NULL DEFAULT 'him',
     created_at TEXT NOT NULL
 );
@@ -53,6 +54,11 @@ class Task:
     priority: str
     done: bool
     source: str
+    started_at: str | None = None
+
+    @property
+    def started(self) -> bool:
+        return self.started_at is not None
 
     def line(self) -> str:
         bits = [self.title]
@@ -106,6 +112,18 @@ class Store:
                 (1 if done else 0,),
             ).fetchall()
         return [_task(r) for r in rows]
+
+    def start_task(self, tid: str) -> Task | None:
+        """He has begun this. Only he can say so — never inferred from a clock."""
+        t = self.task(tid)
+        if t is None or t.done or t.started:
+            return None
+        with self._lock:
+            self._db.execute("UPDATE tasks SET started_at=? WHERE id=?",
+                             (clock.now().isoformat(), tid))
+            self._db.commit()
+        self._t.append("task_started", id=tid, summary=t.title)
+        return self.task(tid)
 
     def complete_task(self, tid: str) -> Task | None:
         t = self.task(tid)
@@ -165,7 +183,7 @@ class Store:
 def _task(row: sqlite3.Row) -> Task:
     return Task(id=row["id"], title=row["title"], subject=row["subject"],
                 due=row["due"], priority=row["priority"], done=bool(row["done"]),
-                source=row["source"])
+                source=row["source"], started_at=row["started_at"])
 
 
 def _selftest() -> None:
@@ -196,6 +214,10 @@ def _selftest() -> None:
         assert s.update_task(b.id, priority="high").priority == "high"
         assert s.update_task(b.id, bogus="x") is None, "unknown fields change nothing"
 
+        assert s.start_task(b.id).started is True
+        assert s.start_task(b.id) is None, "starting twice is not an event"
+        assert s.tasks()[0].started_at is not None or s.find_task("Read Ch 3").started
+
         s.remember("practice Tuesdays", standing=True)
         s.remember("lab meeting moved", until="2026-09-01")   # expired
         s.remember("essay due soon", until="2026-12-01")
@@ -205,6 +227,7 @@ def _selftest() -> None:
         kinds = [e.kind for e in t.window(2)]
         assert kinds.count("task_added") == 3
         assert "task_done" in kinds and "remembered" in kinds and "task_updated" in kinds
+        assert "task_started" in kinds
 
         clock.set_for_test(None)
     print("store selftest ok")

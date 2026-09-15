@@ -85,7 +85,7 @@ def _split(events: list[Event]) -> tuple[list[Event], list[Event]]:
     return events[: cut + 1], events[cut + 1 :]
 
 
-def _tail(sealed: list[Event], loose: list[Event]) -> dict[str, str]:
+def _tail(sealed: list[Event], loose: list[Event], extra: str = "") -> dict[str, str]:
     """The clock and the state of play — the only part that moves each tick.
 
     This is what replaces the occasion table.  Every fact a gate used to encode
@@ -112,18 +112,30 @@ def _tail(sealed: list[Event], loose: list[Event]) -> dict[str, str]:
         "Say something only by calling the `say` tool. Plain text is thinking, "
         "not a message, and is never delivered."
     )
+    if extra:
+        lines.append("")
+        lines.append(extra)
     return {"role": "user", "content": "\n".join(lines)}
 
 
-def build(transcript: Transcript, system: str, *, days: int = 2) -> list[dict[str, str]]:
-    """The full message list for one turn."""
+def build(transcript: Transcript, system: str, *, days: int = 2,
+          extra: str = "") -> list[dict[str, str]]:
+    """The full message list for one turn.
+
+    *extra* is live state — the board, standing facts, today's schedule — and
+    goes in the tail rather than the system prompt on purpose.  Anything that
+    can change mid-evening must sit after the cached prefix, or every edit to a
+    task invalidates the whole window and the month costs several times what it
+    should.  It is a few hundred fresh tokens; the prefix is fifteen thousand
+    cached ones.
+    """
     events = transcript.window(days)
     sealed, loose = _split(events)
     return [
         {"role": "system", "content": system},
         *_render(sealed),
         *_render(loose),
-        _tail(sealed, loose),
+        _tail(sealed, loose, extra),
     ]
 
 
