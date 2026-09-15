@@ -24,6 +24,9 @@ def cmd_gateway(args) -> int:
         rt.add_channel(discord.send)
 
     if rt.cfg.api.token:
+        # ponytail: Flask's own server, threaded. One user on a LAN behind a
+        # bearer token — put waitress in front of it when something other than
+        # his phone and his laptop starts calling this.
         app = create_app(rt)
         threading.Thread(
             target=lambda: app.run(host=rt.cfg.api.host, port=rt.cfg.api.port,
