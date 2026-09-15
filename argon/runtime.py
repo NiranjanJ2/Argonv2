@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import threading
+from datetime import datetime
 import time
 from pathlib import Path
 
@@ -262,10 +263,18 @@ class Runtime:
                   budget.month()))
 
     # -- loops ------------------------------------------------------------
-    def tick_once(self) -> object | None:
+    def tick_once(self, *, force: bool = False) -> object | None:
         """One scheduled look.  Returns None when the clock says don't bother."""
-        if not schedule.should_tick():
+        if not force and not schedule.should_tick():
             return None
+        # Honour the cadence across restarts. `run()` ticks on entry, so three
+        # redeploys in a minute produced three looks seventeen seconds apart and
+        # two near-identical messages. The cadence is the scheduler's job — cost
+        # and rhythm — and a restart is not a reason to break it.
+        if not force and (last := self.transcript.last("tick")) is not None:
+            since = (clock.now() - datetime.fromisoformat(last.at)).total_seconds()
+            if since < schedule.TICK_MINUTES * 60:
+                return None
         notice = budget.take_notification(self.cfg.monthly_cap_usd)
         if notice:
             # Sent directly: there is no budget left to ask the model to phrase it.
@@ -301,7 +310,7 @@ def _google(fn, account: str, *args) -> str:
 def _selftest() -> None:
     import os
     import tempfile
-    from datetime import datetime
+    from datetime import datetime, timedelta
 
     from argon import provider
 
@@ -335,6 +344,16 @@ def _selftest() -> None:
 
         out = rt.tick_once()
         assert out is not None and out.spoke is False and sent == []
+
+        # A second look moments later is the restart bug: skip it.
+        assert rt.tick_once() is None, "cadence must survive a restart"
+        clock.set_for_test(datetime(2026, 9, 14, 18, 0, tzinfo=clock.TZ)
+                           + timedelta(minutes=schedule.TICK_MINUTES + 1))
+        # insert, not append: the queue pops from the front and "hello" below
+        # is reserved for the interactive turn.
+        scripted.insert(0, provider.Reply(text="still quiet"))
+        assert rt.tick_once() is not None, "and resume once the interval has passed"
+        clock.set_for_test(datetime(2026, 9, 14, 18, 0, tzinfo=clock.TZ))
         msgs = context.build(rt.transcript, "S", extra=rt.live_state())
         assert "AP Chem pset" in msgs[-1]["content"], "board must reach the model"
 

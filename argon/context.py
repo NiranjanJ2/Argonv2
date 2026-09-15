@@ -100,9 +100,19 @@ def _tail(sealed: list[Event], loose: list[Event], extra: str = "") -> dict[str,
     else:
         mins = int((now - datetime.fromisoformat(spoke.at)).total_seconds() // 60)
         ago = f"{mins // 60}h {mins % 60}m" if mins >= 60 else f"{mins}m"
-        lines.append(f"You last spoke at {spoke.at[11:16]} ({ago} ago).")
+        lines.append(f"You last spoke at {spoke.at[11:16]} ({ago} ago), saying:")
+        lines.append(f"  \"{str(spoke.payload.get('text', ''))[:200]}\"")
         replied = any(e.kind == "message_in" for e in loose)
         lines.append("He has replied since." if replied else "He has not replied since.")
+        if mins < 30 and not replied:
+            # Quoting it back and naming the consequence, because the bare
+            # elapsed time was not enough: two messages went out seventeen
+            # seconds apart with the first one visible in context.
+            lines.append(
+                "You spoke very recently and he has not answered. Saying "
+                "substantially the same thing again is how you get muted. "
+                "Stay quiet unless something has genuinely changed since then."
+            )
 
     looks = sum(1 for e in loose if e.kind in COUNTED)
     if looks:
