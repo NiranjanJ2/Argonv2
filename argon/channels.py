@@ -112,26 +112,36 @@ class DiscordChannel:
 
         threading.Thread(target=run, daemon=True, name="discord").start()
 
-    def send(self, text: str) -> None:
-        """Called from the agent's thread, so hop to Discord's loop.
+    #: How long the agent thread waits for Discord to accept a message. Long
+    #: enough for a REST round trip, short enough not to stall a turn.
+    SEND_TIMEOUT_S = 20.0
 
-        Raises rather than returning quietly when there is nowhere to send:
-        the runtime records a delivery failure, and a message that went nowhere
-        is never mistaken for one that arrived.
+    def send(self, text: str) -> None:
+        """Called from the agent's thread, so hop to Discord's loop and wait.
+
+        Waiting matters: the caller has to learn whether this actually landed.
+        Returning before the send resolves is how nine messages were recorded
+        as sent while every one of them failed.
         """
         if not (self._loop and self._client):
             raise RuntimeError("discord is not connected")
         if not self._channel_id:
             raise RuntimeError("no discord channel known yet; set discord.channel_id")
-        channel = self._client.get_channel(self._channel_id)
-        if channel is None:
-            raise RuntimeError(f"discord channel {self._channel_id} not visible to the bot")
+
+        client, channel_id = self._client, self._channel_id
 
         async def deliver() -> None:
+            # get_channel only knows guild channels and cached private ones, so
+            # it returns None for a DM — which is what Argon actually uses.
+            # fetch_channel asks the API and works for both.
+            channel = client.get_channel(channel_id)
+            if channel is None:
+                channel = await client.fetch_channel(channel_id)
             for part in chunk(text):
                 await channel.send(part)
 
-        asyncio.run_coroutine_threadsafe(deliver(), self._loop)
+        future = asyncio.run_coroutine_threadsafe(deliver(), self._loop)
+        future.result(timeout=self.SEND_TIMEOUT_S)   # raises what the send raised
 
 
 def _selftest() -> None:

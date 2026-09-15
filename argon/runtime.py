@@ -95,15 +95,31 @@ class Runtime:
         return self.turn(background=False)
 
     # -- delivery ---------------------------------------------------------
-    def deliver(self, text: str) -> None:
-        """Send to every attached channel.  A channel that fails must not stop
-        the others, and must not raise into the agent loop."""
+    def deliver(self, text: str) -> list[str]:
+        """Send to every attached channel.  Returns the failures.
+
+        An empty list means at least one channel accepted it. A channel that
+        fails must not stop the others, and must not raise into the agent loop —
+        but the caller has to be told, or `say` reports success for a message
+        that reached nobody.
+        """
+        errors: list[str] = []
         for channel in self._channels:
+            name = getattr(channel, "__self__", channel)
+            name = getattr(name, "name", getattr(channel, "__name__", "channel"))
             try:
                 channel(text)
             except Exception as e:  # noqa: BLE001
-                self.transcript.append("delivery_failed",
-                                       summary=f"{getattr(channel, 'name', channel)}: {e}")
+                errors.append(f"{name}: {e}")
+        if not errors:
+            return []
+        if len(errors) == len(self._channels):
+            self.transcript.append("delivery_failed", summary="; ".join(errors)[:300])
+            return errors
+        # Some route worked, so he got it. Still worth recording — a channel
+        # that is quietly broken should be findable before it is the only one.
+        self.transcript.append("delivery_partial", summary="; ".join(errors)[:300])
+        return []
 
     def add_channel(self, send) -> None:
         self._channels.append(send)
@@ -396,9 +412,18 @@ def _selftest() -> None:
         # A channel that throws does not break delivery to the others.
         rt.add_channel(lambda _: (_ for _ in ()).throw(RuntimeError("discord down")))
         rt.add_channel(sent.append)
-        rt.deliver("x")
+        assert rt.deliver("x") == [], "one good channel means he received it"
         assert sent.count("x") == 2, sent
-        assert "delivery_failed" in [e.kind for e in rt.transcript.window(3)]
+        kinds = [e.kind for e in rt.transcript.window(3)]
+        assert "delivery_partial" in kinds, "a broken channel stays findable"
+        assert "delivery_failed" not in kinds
+
+        # When nothing works, say() must hear about it.
+        dead = Runtime(config.Config())
+        dead.add_channel(lambda _: (_ for _ in ()).throw(RuntimeError("no channel")))
+        errors = dead.deliver("y")
+        assert errors and "no channel" in errors[0]
+        assert "delivery_failed" in [e.kind for e in dead.transcript.window(3)]
 
         clock.set_for_test(None)
         del os.environ["ARGON_HOME"]

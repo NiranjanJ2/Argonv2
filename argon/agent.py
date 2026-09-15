@@ -113,21 +113,36 @@ class Agent:
 
     # -- delivery ---------------------------------------------------------
     def say(self, text: str) -> str:
-        """The only path to him.  Appends before sending so a send failure
-        cannot make Argon forget it already spoke — repeating a message he did
-        get is worse than dropping one he did not."""
+        """The only path to him.
+
+        Records what actually happened, which is not the same as what was
+        attempted. A `message_out` means he received it; a total delivery
+        failure is recorded as `undelivered` instead, and reported to the model
+        as an error.
+
+        Reporting success for a message that reached nobody is how nine
+        rewordings went out in twenty seconds: the model saw "sent", then saw
+        the failure, and hunted for phrasing that would work. The model must be
+        told plainly that the channel is broken and that retrying is pointless.
+        """
         text = (text or "").strip()
         if not text:
             return "Error: empty message not sent"
+
+        errors = self.deliver(text)
+        if errors:
+            self.t.append("undelivered", text=text, summary="; ".join(errors)[:200])
+            return (f"NOT DELIVERED — {'; '.join(errors)[:200]}. He did not receive this. "
+                    f"The channel is misconfigured; rewording will not help. "
+                    f"Do not call say again this turn.")
         self.t.append("message_out", text=text)
-        self.deliver(text)
         return "sent"
 
-    #: Replaced by the runtime with the real channel. Default drops the message
-    #: rather than crashing, so a misconfigured channel is visible in the
-    #: transcript instead of taking the loop down.
-    def deliver(self, text: str) -> None:  # pragma: no cover - overridden
-        pass
+    #: Replaced by the runtime with the real channels. Returns the delivery
+    #: failures; empty means it landed. The default accepts, so a bare Agent in
+    #: a test is not reporting a broken channel.
+    def deliver(self, text: str) -> list[str]:  # pragma: no cover - overridden
+        return []
 
     def receive(self, text: str, *, source: str = "ios") -> Outcome:
         """He said something.  Record it, then answer."""
@@ -155,7 +170,12 @@ def _selftest() -> None:
 
         agent = Agent(cfg, t, store, tools, "SYS")
         delivered: list[str] = []
-        agent.deliver = delivered.append
+
+        def deliver(text: str) -> list[str]:
+            delivered.append(text)
+            return []
+
+        agent.deliver = deliver
         tools.add("say", "Send him a message.", agent.say,
                   params={"text": {"type": "string"}}, required=["text"])
 
@@ -202,6 +222,16 @@ def _selftest() -> None:
         # An empty say is refused rather than sending a blank message.
         assert agent.say("   ").startswith("Error")
         assert delivered == before
+
+        # A channel that accepts nothing must not be reported as success.
+        agent.deliver = lambda text: ["discord: channel not visible"]
+        result = agent.say("did this land?")
+        assert result.startswith("NOT DELIVERED"), result
+        assert "rewording will not help" in result
+        kinds = [e.kind for e in t.window(2)]
+        assert "undelivered" in kinds
+        assert not any(e.kind == "message_out" and e.payload.get("text") == "did this land?"
+                       for e in t.window(2)), "a failed send is not a message he received"
 
         clock.set_for_test(None)
         del os.environ["ARGON_HOME"]
