@@ -208,25 +208,32 @@ class Runtime:
               lambda text: (self.transcript.append("note", summary=text), "noted")[1],
               params={"text": {"type": "string"}}, required=["text"])
 
-        accounts = self.cfg.google_accounts
-        primary = accounts[0] if accounts else "personal"
+        # Google accounts are role-specialised — work holds calendar and tasks,
+        # school holds Classroom — so each tool resolves the account that can
+        # actually serve it. The model never has to know which is which, and
+        # cannot misroute a call into an "insufficient scopes" error.
+        def route(capability: str, fn, *args) -> str:
+            account = google.account_for(capability, self.cfg.google_accounts)
+            if account is None:
+                return (f"No Google account is authorised for {capability}. "
+                        f"Run `argon google-auth <account>` on the server.")
+            return _google(fn, account, *args)
+
         t.add("calendar", "His calendar for the next few days.",
-              lambda days=7, account=primary: _google(google.list_events, account, days),
-              params={"days": {"type": "integer"}, "account": {"type": "string"}})
+              lambda days=7: route("calendar", google.list_events, days),
+              params={"days": {"type": "integer"}})
         t.add("add_event", "Put something on his calendar.",
-              lambda title, start, end="", account=primary:
-                  _google(google.create_event, account, title, start, end),
+              lambda title, start, end="":
+                  route("calendar", google.create_event, title, start, end),
               params={"title": {"type": "string"},
                       "start": {"type": "string", "description": "YYYY-MM-DDTHH:MM"},
-                      "end": {"type": "string"}, "account": {"type": "string"}},
+                      "end": {"type": "string"}},
               required=["title", "start"])
         t.add("assignments", "Outstanding Google Classroom work.",
-              lambda account=primary: _google(google.list_assignments, account),
-              params={"account": {"type": "string"}})
+              lambda: route("classroom", google.list_assignments))
         t.add("search_mail", "Search his mail.",
-              lambda query, account=primary: _google(google.search_mail, account, query),
-              params={"query": {"type": "string"}, "account": {"type": "string"}},
-              required=["query"])
+              lambda query: route("gmail", google.search_mail, query),
+              params={"query": {"type": "string"}}, required=["query"])
 
         t.add("schedule_today", "Today's bell schedule.", lambda: bell.describe())
         t.add("set_ac", "Change the air conditioner.",
@@ -349,8 +356,11 @@ def _selftest() -> None:
         assert rt.ac_units() == []
         assert rt.ac_set("nope", {"power": 1})["ok"] is False
 
-        # A dead Google account answers instead of vanishing.
+        # A dead Google account answers instead of vanishing, and an
+        # unauthorised capability says which command fixes it.
         assert "not connected" in _google(google.list_events, "nobody", 7)
+        assert "No Google account is authorised for calendar" in \
+            rt.tools.call("calendar", {}, background=True)
 
         # A channel that throws does not break delivery to the others.
         rt.add_channel(lambda _: (_ for _ in ()).throw(RuntimeError("discord down")))

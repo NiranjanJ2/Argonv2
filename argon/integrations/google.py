@@ -25,13 +25,25 @@ from typing import Any
 
 from argon import clock, config
 
+#: What each capability needs. Accounts are role-specialised — his `work`
+#: account holds calendar and tasks, `school` holds Classroom, `personal` holds
+#: almost nothing — so a single global scope list is wrong and asking the wrong
+#: account returns "insufficient authentication scopes", which reads like a
+#: broken grant rather than a misrouted call.
+CAPABILITIES: dict[str, str] = {
+    "calendar": "https://www.googleapis.com/auth/calendar",
+    "tasks": "https://www.googleapis.com/auth/tasks",
+    "classroom": "https://www.googleapis.com/auth/classroom.courses.readonly",
+    "gmail": "https://www.googleapis.com/auth/gmail.readonly",
+    "drive": "https://www.googleapis.com/auth/drive.readonly",
+}
+
+#: Requested when authorising a *new* account. Existing grants are never
+#: widened to match this — they are used for whatever they already cover.
 SCOPES = [
-    "https://www.googleapis.com/auth/calendar",
-    "https://www.googleapis.com/auth/tasks",
-    "https://www.googleapis.com/auth/classroom.courses.readonly",
-    "https://www.googleapis.com/auth/classroom.coursework.me",
+    *CAPABILITIES.values(),
     "https://www.googleapis.com/auth/classroom.announcements.readonly",
-    "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/classroom.student-submissions.me.readonly",
 ]
 
 
@@ -66,6 +78,31 @@ def client_secret_path():
     return found[0] if found else folder / "client_secret.json"
 
 
+def granted(account: str) -> set[str]:
+    """Scopes an account's token actually holds. Empty when it has none."""
+    p = token_path(account)
+    if not p.exists():
+        return set()
+    try:
+        return set(json.loads(p.read_text()).get("scopes") or [])
+    except (json.JSONDecodeError, OSError):
+        return set()
+
+
+def can(account: str, capability: str) -> bool:
+    return CAPABILITIES.get(capability, "") in granted(account)
+
+
+def account_for(capability: str, accounts: list[str]) -> str | None:
+    """The first configured account whose grant covers *capability*."""
+    return next((a for a in accounts if can(a, capability)), None)
+
+
+def capabilities(accounts: list[str]) -> dict[str, str | None]:
+    """Which account serves what. The map doctor prints."""
+    return {name: account_for(name, accounts) for name in CAPABILITIES}
+
+
 def _credentials(account: str):
     # File check before the import: "not connected" is the commonest failure and
     # should explain itself even on a box where the client libraries are absent.
@@ -79,7 +116,9 @@ def _credentials(account: str):
     from google.auth.transport.requests import Request
     from google.oauth2.credentials import Credentials
 
-    creds = Credentials.from_authorized_user_file(str(p), SCOPES)
+    # The token's own scopes, not SCOPES: asking for more than was granted
+    # makes the refresh fail with invalid_scope and loses a working grant.
+    creds = Credentials.from_authorized_user_file(str(p), sorted(granted(account)) or None)
     if creds.valid:
         return creds
     if creds.expired and creds.refresh_token:
@@ -118,18 +157,43 @@ def authorise(account: str, port: int = 8765) -> str:
     return f"connected {account}"
 
 
+#: A cheap real call per capability, to prove the grant rather than trust the file.
+_PROBES = {
+    "calendar": lambda s: s("calendar", "v3").calendarList().list(maxResults=1).execute(),
+    "tasks": lambda s: s("tasks", "v1").tasklists().list(maxResults=1).execute(),
+    "classroom": lambda s: s("classroom", "v1").courses().list(pageSize=1).execute(),
+    "gmail": lambda s: s("gmail", "v1").users().getProfile(userId="me").execute(),
+    "drive": lambda s: s("drive", "v3").files().list(pageSize=1).execute(),
+}
+
+
 def status(accounts: list[str]) -> str:
-    """Exercise each grant for real.  Never trusts the token file alone."""
+    """Exercise each grant for real, against something it claims to cover.
+
+    Probing calendar on an account that was never granted calendar reports
+    "insufficient scopes", which looks like a dead grant and is really a
+    misrouted probe. Each account is tested on what it actually holds.
+    """
+    if not accounts:
+        return "no Google accounts configured"
     lines = []
     for name in accounts:
-        try:
-            _service(name, "calendar", "v3").calendarList().list(maxResults=1).execute()
-            lines.append(f"{name}: ok")
-        except GoogleUnavailable as e:
-            lines.append(f"{name}: {e}")
-        except Exception as e:  # noqa: BLE001
-            lines.append(f"{name}: failed ({type(e).__name__}: {e})")
-    return "\n".join(lines) or "no Google accounts configured"
+        have = [c for c in CAPABILITIES if can(name, c)]
+        if not have:
+            lines.append(f"{name}: no usable scopes"
+                         + ("" if token_path(name).exists() else " (not connected)"))
+            continue
+        results = []
+        for capability in have:
+            try:
+                _PROBES[capability](lambda api, v: _service(name, api, v))
+                results.append(capability)
+            except GoogleUnavailable as e:
+                results.append(f"{capability}: {e}")
+            except Exception as e:  # noqa: BLE001
+                results.append(f"{capability}: FAILED ({type(e).__name__})")
+        lines.append(f"{name}: {', '.join(results)}")
+    return "\n".join(lines)
 
 
 # -- formatting -------------------------------------------------------------
@@ -262,6 +326,35 @@ def _selftest() -> None:
 
         assert status([]) == "no Google accounts configured"
         assert "not connected" in status(["nobody"])
+
+        # Capability routing: accounts are role-specialised, so the right
+        # account for calendar is not the right one for Classroom.
+        def write_token(name: str, scopes: list[str]) -> None:
+            token_path(name).write_text(json.dumps({"scopes": scopes}))
+
+        write_token("personal", ["https://www.googleapis.com/auth/drive.readonly"])
+        write_token("work", [CAPABILITIES["calendar"], CAPABILITIES["tasks"],
+                             CAPABILITIES["gmail"]])
+        write_token("school", [CAPABILITIES["classroom"], CAPABILITIES["gmail"]])
+        accounts = ["personal", "work", "school"]
+
+        assert granted("personal") == {CAPABILITIES["drive"]}
+        assert can("work", "calendar") and not can("work", "classroom")
+        assert can("school", "classroom") and not can("school", "calendar")
+
+        assert account_for("calendar", accounts) == "work"
+        assert account_for("classroom", accounts) == "school"
+        assert account_for("drive", accounts) == "personal", "first match wins"
+        assert account_for("gmail", accounts) == "work", "order decides ties"
+        assert account_for("nothing_like_this", accounts) is None
+
+        caps = capabilities(accounts)
+        assert caps["calendar"] == "work" and caps["classroom"] == "school"
+
+        # An account with no usable scopes says so rather than looking broken.
+        write_token("empty", [])
+        assert "no usable scopes" in status(["empty"])
+        assert granted("missing-entirely") == set()
 
         del os.environ["ARGON_HOME"]
     print("google selftest ok")

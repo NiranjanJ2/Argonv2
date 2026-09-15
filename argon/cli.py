@@ -81,9 +81,25 @@ def cmd_tick(args) -> int:
     return 0
 
 
+def _section(label: str, work) -> None:
+    """Run one diagnostic. A section that explodes must not take the rest with
+    it — doctor is what you reach for when things are already broken."""
+    try:
+        result = work()
+    except Exception as e:  # noqa: BLE001
+        print(f"{label:15s}FAILED: {type(e).__name__}: {e}")
+        return
+    if result is None:
+        return
+    lines = str(result).splitlines()
+    print(f"{label:15s}{lines[0] if lines else ''}")
+    for line in lines[1:]:
+        print(f"{'':15s}{line}")
+
+
 def cmd_doctor(args) -> int:
     """Check the things that have actually broken before."""
-    from argon.integrations.google import status
+    from argon.integrations.google import capabilities, status
     from argon.integrations.push import Push, PushError
     from argon.runtime import Runtime
 
@@ -101,25 +117,22 @@ def cmd_doctor(args) -> int:
 
     print(f"provider       {cfg.provider.model} at {cfg.provider.api_base} "
           f"(key: {'set' if cfg.provider.api_key else 'MISSING'})")
-    print("google:")
-    for line in status(cfg.google_accounts).splitlines():
-        print(f"  {line}")
+
+    _section("google", lambda: status(cfg.google_accounts))
+    _section("routing", lambda: "\n".join(
+        f"{name:10s} -> {account or 'NOBODY'}"
+        for name, account in capabilities(cfg.google_accounts).items()))
 
     if cfg.apns.enabled:
-        print("apns:")
-        try:
-            for line in Push(cfg.apns).probe().splitlines():
-                print(f"  {line}")
-        except PushError as e:
-            print(f"  {e}")
-        print(f"  device token: {'registered' if rt.device_token() else 'NONE'}")
+        _section("apns", lambda: Push(cfg.apns).probe())
+        _section("device", lambda: "registered" if rt.device_token() else "NONE")
     else:
         print("apns           disabled")
 
-    print(f"discord        {'on' if cfg.discord.enabled else 'off'}, "
-          f"{len(cfg.discord.allow_from)} allowed")
-    print(f"transcript     {len(rt.transcript.window(2))} events in the last two days")
-    print(f"tasks          {len(rt.store.tasks())} open")
+    _section("discord", lambda: f"{'on' if cfg.discord.enabled else 'off'}, "
+                                f"{len(cfg.discord.allow_from)} allowed")
+    _section("transcript", lambda: f"{len(rt.transcript.window(2))} events in two days")
+    _section("tasks", lambda: f"{len(rt.store.tasks())} open")
     return 0
 
 
