@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 import threading
+import time
 
 from argon import budget, clock, config, schedule
 
@@ -18,10 +19,20 @@ def cmd_gateway(args) -> int:
     rt = Runtime()
     if rt.cfg.apns.enabled:
         rt.add_channel(rt.push_channel)
+    discord = None
     if rt.cfg.discord.enabled and rt.cfg.discord.token:
         discord = DiscordChannel(rt.cfg.discord, lambda text: rt.receive(text, source="discord"))
         discord.start()
         rt.add_channel(discord.send)
+        # Wait briefly for the login to resolve so the banner tells the truth
+        # rather than reporting "enabled" for a token the gateway rejected.
+        for _ in range(20):
+            if discord.ready or discord.error:
+                break
+            time.sleep(0.5)
+        print(f"discord {'connected' if discord.ready else 'FAILED: ' + (discord.error or 'timeout')}")
+    else:
+        print("discord disabled")
 
     if rt.cfg.api.token:
         # ponytail: Flask's own server, threaded. One user on a LAN behind a

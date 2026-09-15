@@ -18,6 +18,8 @@ import asyncio
 import threading
 from collections.abc import Callable
 
+from loguru import logger
+
 from argon.config import Discord as DiscordConfig
 
 #: Discord refuses anything longer.
@@ -56,6 +58,8 @@ class DiscordChannel:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._channel_id: int | None = None
         self._client = None
+        self.ready = False
+        self.error: str | None = None
 
     def start(self) -> None:
         import discord
@@ -64,6 +68,14 @@ class DiscordChannel:
         intents.message_content = True
         client = discord.Client(intents=intents)
         self._client = client
+
+        @client.event
+        async def on_ready():  # noqa: ANN001
+            # Say so out loud. A channel that connects silently is
+            # indistinguishable from one that failed silently, and "is Discord
+            # actually up" should never need a packet capture to answer.
+            self.ready = True
+            logger.info("discord connected as {}", client.user)
 
         @client.event
         async def on_message(message):  # noqa: ANN001
@@ -81,7 +93,13 @@ class DiscordChannel:
         def run() -> None:
             self._loop = asyncio.new_event_loop()
             asyncio.set_event_loop(self._loop)
-            self._loop.run_until_complete(client.start(self.cfg.token))
+            try:
+                self._loop.run_until_complete(client.start(self.cfg.token))
+            except Exception as e:  # noqa: BLE001
+                # A bad token raises in this thread and would otherwise vanish,
+                # leaving a gateway that looks healthy and answers nothing.
+                self.error = f"{type(e).__name__}: {e}"
+                logger.error("discord failed: {}", self.error)
 
         threading.Thread(target=run, daemon=True, name="discord").start()
 
@@ -121,6 +139,7 @@ def _selftest() -> None:
     ch = DiscordChannel(DiscordConfig(token="t", allow_from=["1"]), seen.append)
     ch.send("nothing is connected yet")  # must not raise
     assert seen == []
+    assert ch.ready is False and ch.error is None, "starts neither up nor failed"
     print("channels selftest ok")
 
 
