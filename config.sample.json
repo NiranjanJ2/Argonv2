@@ -1,0 +1,27 @@
+{
+  "provider": {
+    "api_key": "sk-...",
+    "api_base": "https://api.openai.com/v1",
+    "model": "gpt-5.6-luna",
+    "fallback_model": "gpt-5-mini"
+  },
+  "monthly_cap_usd": 5.0,
+  "google_accounts": ["personal", "school"],
+  "api": {
+    "host": "0.0.0.0",
+    "port": 3995,
+    "token": "generate-a-long-random-string"
+  },
+  "discord": {
+    "enabled": true,
+    "token": "...",
+    "allow_from": ["799803607570317333"]
+  },
+  "apns": {
+    "enabled": true,
+    "team_id": "DX3U2FC8X5",
+    "key_id": "ZHG4UUNFV4",
+    "bundle_id": "com.niranjanj.argon",
+    "production": true
+  }
+}
