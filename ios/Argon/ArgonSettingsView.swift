@@ -13,7 +13,8 @@ struct ArgonSettingsView: View {
   @State private var result: String?
 
   var body: some View {
-    NavigationStack {
+    ZStack {
+      ArgonAmbience.now(ticking: store.state.ticking)
       Form {
         Section("Server") {
           TextField("http://host:port", text: $base)
@@ -66,8 +67,10 @@ struct ArgonSettingsView: View {
                + "so a tap is never lost to a dropped connection.")
         }
       }
+      .scrollContentBackground(.hidden)
       .navigationTitle("Settings")
     }
+    .tint(Argon.accent)
   }
 
   private func check() async {

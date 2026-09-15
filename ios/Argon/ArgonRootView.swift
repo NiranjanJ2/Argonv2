@@ -24,6 +24,12 @@ struct ArgonRootView: View {
         .tabItem { Label("Settings", systemImage: "gearshape") }
         .tag(Tab.settings)
     }
+    .tint(Argon.accent)
+    // The tab bar sits on glass too, so the ambient field runs behind it
+    // rather than stopping at a grey strip.
+    .toolbarBackground(.ultraThinMaterial, for: .tabBar)
+    .toolbarColorScheme(.dark, for: .tabBar)
+    .preferredColorScheme(.dark)
     .task { await store.refresh() }
     // Refresh when he brings the app forward. Not a timer — iOS suspends those
     // in the background, so a timer refresh only fires while he is already

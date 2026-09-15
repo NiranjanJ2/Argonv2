@@ -6,58 +6,81 @@ struct ArgonChatView: View {
   @FocusState private var focused: Bool
 
   var body: some View {
-    NavigationStack {
+    ZStack {
+      ArgonAmbience.now(ticking: store.state.ticking)
+
       VStack(spacing: 0) {
         ScrollViewReader { proxy in
           ScrollView {
             LazyVStack(alignment: .leading, spacing: 10) {
-              if store.messages.isEmpty {
-                Text(store.connection.isLive
-                     ? "Nothing yet. Ask him something."
-                     : "No cached conversation.")
-                  .font(.footnote).foregroundStyle(.secondary)
-                  .frame(maxWidth: .infinity).padding(.top, 40)
-              }
-              ForEach(store.messages) { message in
-                ArgonBubble(message: message).id(message.id)
-              }
+              if store.messages.isEmpty { empty }
+              ForEach(store.messages) { ArgonBubble(message: $0).id($0.id) }
             }
-            .padding()
+            .padding(.horizontal, 16).padding(.vertical, 12)
           }
+          .scrollIndicators(.hidden)
           .onChange(of: store.messages.count) { _, _ in scroll(proxy) }
           .onAppear { scroll(proxy, animated: false) }
         }
 
         if let failure = store.failure {
-          HStack {
-            Text(failure).font(.caption).foregroundStyle(.orange)
+          HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill").font(.caption2)
+            Text(failure).font(Argon.label)
             Spacer()
-            Button("OK") { store.dismissFailure() }.font(.caption)
+            Button("Dismiss") { store.dismissFailure() }.font(Argon.label)
           }
-          .padding(.horizontal).padding(.vertical, 6)
-          .background(.orange.opacity(0.1))
+          .foregroundStyle(Argon.overdue)
+          .padding(.horizontal, 16).padding(.vertical, 8)
+          .background(.ultraThinMaterial)
         }
 
-        HStack(spacing: 8) {
-          TextField("Message", text: $draft, axis: .vertical)
-            .textFieldStyle(.roundedBorder)
-            .lineLimit(1...5)
-            .focused($focused)
-            .onSubmit(send)
-          Button(action: send) {
-            Image(systemName: "arrow.up.circle.fill").font(.title2)
-          }
-          .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
-        }
-        .padding()
+        composer
       }
-      .navigationTitle("Argon")
-      .navigationBarTitleDisplayMode(.inline)
-      .toolbar { ArgonConnectionBadge(store: store) }
-      .refreshable { await store.refresh() }
-      .task { await store.markRead() }
     }
+    .refreshable { await store.refresh() }
+    .task { await store.markRead() }
   }
+
+  private var empty: some View {
+    VStack(spacing: 6) {
+      Text(store.connection.isLive ? "Nothing yet." : "No cached conversation.")
+        .font(Argon.body).foregroundStyle(Argon.Text.secondary)
+      Text("Ask him what's due.").font(Argon.label).foregroundStyle(Argon.Text.faint)
+    }
+    .frame(maxWidth: .infinity).padding(.top, 60)
+  }
+
+  private var composer: some View {
+    HStack(spacing: 10) {
+      TextField("", text: $draft, prompt:
+                  Text("Message Argon").foregroundStyle(Argon.Text.faint), axis: .vertical)
+        .font(Argon.body)
+        .foregroundStyle(Argon.Text.primary)
+        .lineLimit(1...5)
+        .focused($focused)
+        .padding(.horizontal, 14).padding(.vertical, 9)
+        .background {
+          Capsule().fill(.ultraThinMaterial)
+            .overlay(Capsule().strokeBorder(Argon.hairline, lineWidth: 1))
+        }
+
+      Button(action: send) {
+        Image(systemName: "arrow.up")
+          .font(.system(size: 15, weight: .semibold))
+          .foregroundStyle(canSend ? Argon.Ink.void : Argon.Text.faint)
+          .frame(width: 34, height: 34)
+          .background(Circle().fill(canSend ? Argon.accent : Color.white.opacity(0.07)))
+      }
+      .buttonStyle(.plain)
+      .disabled(!canSend)
+      .animation(.easeOut(duration: 0.15), value: canSend)
+    }
+    .padding(.horizontal, 16).padding(.vertical, 10)
+    .background(.ultraThinMaterial)
+  }
+
+  private var canSend: Bool { !draft.trimmingCharacters(in: .whitespaces).isEmpty }
 
   private func send() {
     let text = draft
@@ -67,11 +90,8 @@ struct ArgonChatView: View {
 
   private func scroll(_ proxy: ScrollViewProxy, animated: Bool = true) {
     guard let last = store.messages.last?.id else { return }
-    if animated {
-      withAnimation { proxy.scrollTo(last, anchor: .bottom) }
-    } else {
-      proxy.scrollTo(last, anchor: .bottom)
-    }
+    if animated { withAnimation { proxy.scrollTo(last, anchor: .bottom) } }
+    else { proxy.scrollTo(last, anchor: .bottom) }
   }
 }
 
@@ -80,21 +100,29 @@ struct ArgonBubble: View {
 
   var body: some View {
     HStack {
-      if !message.isFromArgon { Spacer(minLength: 40) }
-      VStack(alignment: message.isFromArgon ? .leading : .trailing, spacing: 2) {
+      if !message.isFromArgon { Spacer(minLength: 48) }
+      VStack(alignment: message.isFromArgon ? .leading : .trailing, spacing: 3) {
         Text(attributed)
+          .font(Argon.body)
           .textSelection(.enabled)
-          .padding(.horizontal, 12).padding(.vertical, 8)
-          .background(message.isFromArgon ? AnyShapeStyle(.quaternary)
-                                          : AnyShapeStyle(Color.accentColor))
-          .foregroundStyle(message.isFromArgon ? Color.primary : Color.white)
-          .clipShape(RoundedRectangle(cornerRadius: 16))
-          .opacity(message.pending ? 0.55 : 1)
+          .foregroundStyle(message.isFromArgon ? Argon.Text.primary : Argon.Ink.void)
+          .padding(.horizontal, 13).padding(.vertical, 9)
+          .background {
+            if message.isFromArgon {
+              RoundedRectangle(cornerRadius: 17, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay(RoundedRectangle(cornerRadius: 17, style: .continuous)
+                  .strokeBorder(Argon.hairline, lineWidth: 1))
+            } else {
+              RoundedRectangle(cornerRadius: 17, style: .continuous)
+                .fill(Argon.accent.opacity(message.pending ? 0.45 : 0.92))
+            }
+          }
         if message.pending {
-          Text("sending…").font(.caption2).foregroundStyle(.secondary)
+          Text("sending…").font(Argon.label).foregroundStyle(Argon.Text.faint)
         }
       }
-      if message.isFromArgon { Spacer(minLength: 40) }
+      if message.isFromArgon { Spacer(minLength: 48) }
     }
   }
 
