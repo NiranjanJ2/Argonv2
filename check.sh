@@ -27,11 +27,19 @@ else
 fi
 
 if command -v xcrun >/dev/null 2>&1 && sdk=$(xcrun --sdk iphoneos --show-sdk-path 2>/dev/null); then
+  # The whole layer, including UIKit and DeviceActivity, against the real SDK.
   if out=$(xcrun swiftc -typecheck -sdk "$sdk" -target arm64-apple-ios17.0 \
            -swift-version 5 ios/Argon/*.swift 2>&1); then
     printf '  ok    ios (typecheck)\n'
   else
     printf '  FAIL  ios\n%s\n' "$out"; fail=1
+  fi
+  # The sync layer is pure Foundation, so it actually runs on the Mac.
+  if out=$(cd ios && swift test 2>&1); then
+    n=$(printf '%s' "$out" | grep -o "Executed [0-9]* tests" | tail -1)
+    printf '  ok    ios sync tests (%s)\n' "${n:-ran}"
+  else
+    printf '  FAIL  ios sync tests\n%s\n' "$(printf '%s' "$out" | tail -20)"; fail=1
   fi
 else
   printf '  skip  ios (no iphoneos SDK)\n'

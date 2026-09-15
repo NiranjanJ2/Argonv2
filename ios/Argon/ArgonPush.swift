@@ -44,10 +44,12 @@ final class ArgonPush: NSObject, UNUserNotificationCenterDelegate {
   }
 
   /// A silent push means "come and look" — never a payload to display. The
-  /// server holds the truth; the phone fetches it.
+  /// server holds the truth; the phone fetches it. Refresh flushes the outbox
+  /// first, so a push is also the moment a write stranded by a dead connection
+  /// finally lands.
   func received(userInfo: [AnyHashable: Any]) async -> UIBackgroundFetchResult {
     await store.refresh()
-    return .newData
+    return store.connection.isLive ? .newData : .failed
   }
 
   nonisolated func userNotificationCenter(

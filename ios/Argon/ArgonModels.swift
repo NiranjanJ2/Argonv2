@@ -37,6 +37,20 @@ struct ArgonTask: Codable, Identifiable, Equatable, Hashable {
 
   var isStarted: Bool { startedAt != nil }
 
+  /// A task created on the phone, before the server has given it a real id.
+  /// Carries a `local:` prefix so reconciliation can tell it apart from a row
+  /// the server actually knows about.
+  static func local(title: String, due: String?) -> ArgonTask {
+    var task = try! JSONDecoder().decode(ArgonTask.self, from: Data("""
+    {"id": "local:\(UUID().uuidString)", "title": "", "source": "app"}
+    """.utf8))
+    task.title = title
+    task.due = due
+    return task
+  }
+
+  var isLocal: Bool { id.hasPrefix("local:") }
+
   /// `overdue`, `today`, or a short date. Empty when there is no due date.
   func dueLabel(today: String = ArgonDate.today()) -> String {
     guard let due, due.count >= 10 else { return "" }
@@ -55,9 +69,36 @@ struct ArgonMessage: Codable, Identifiable, Equatable {
   let text: String
   let at: String?
 
-  var id: Int { seq }
+  /// Typed on the phone, not yet acknowledged by the server. Never decoded —
+  /// the server has no opinion about it — and never written to the cache.
+  var pending: Bool = false
+
+  enum CodingKeys: String, CodingKey { case seq, role, text, at }
+
+  /// Unique even before the server assigns a sequence: two pending messages
+  /// both at seq 0 would collide as identifiers and SwiftUI would drop one.
+  var id: String { pending ? "pending:\(localID)" : "seq:\(seq)" }
+
+  private var localID: String { "\(at ?? "")\(text.prefix(40))" }
+
   var isFromArgon: Bool { role == "assistant" }
   var sentDate: Date? { at.flatMap(ArgonDate.parse) }
+
+  /// A message shown before the server has numbered it.
+  static func local(role: String, text: String) -> ArgonMessage {
+    let json = """
+    {"seq": 0, "role": "\(role)", "text": \(quote(text)),
+     "at": "\(ISO8601DateFormatter().string(from: Date()))"}
+    """
+    var message = try! JSONDecoder().decode(ArgonMessage.self, from: Data(json.utf8))
+    message.pending = true
+    return message
+  }
+
+  private static func quote(_ s: String) -> String {
+    String(data: try! JSONSerialization.data(withJSONObject: [s]), encoding: .utf8)!
+      .dropFirst().dropLast().description
+  }
 }
 
 struct ArgonSchool: Codable, Equatable {
