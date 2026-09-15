@@ -40,11 +40,30 @@ class GoogleUnavailable(RuntimeError):
 
 
 def token_path(account: str):
+    """Where an account's token lives.
+
+    Accepts v1's ``google/<account>/token.json`` layout as well as the flat one,
+    so grants that already work keep working instead of being re-authorised.
+    """
+    nested = config.path("google", account, "token.json")
+    if nested.exists():
+        return nested
     return config.path("google", f"{account}.json")
 
 
 def client_secret_path():
-    return config.path("google", "client_secret.json")
+    """The OAuth client secret, under any of the names Google hands out.
+
+    The Console downloads it as ``client_secret_<id>.apps.googleusercontent.com
+    .json``; people rename it to ``client_secret.json`` or ``client_secrets.json``.
+    Globbing costs two lines and saves an hour of "why is it not connecting".
+    """
+    folder = config.path("google", "_").parent
+    for name in ("client_secret.json", "client_secrets.json"):
+        if (folder / name).exists():
+            return folder / name
+    found = sorted(folder.glob("client_secret*.json"))
+    return found[0] if found else folder / "client_secret.json"
 
 
 def _credentials(account: str):
@@ -229,6 +248,17 @@ def _selftest() -> None:
             raise AssertionError("should have raised")
         except GoogleUnavailable as e:
             assert "not connected" in str(e) and "google-auth nobody" in str(e)
+
+        # Either filename is found, and the nested v1 layout is honoured.
+        folder = config.path("google", "_").parent
+        (folder / "client_secrets.json").write_text("{}")
+        assert client_secret_path().name == "client_secrets.json"
+        (folder / "client_secret.json").write_text("{}")
+        assert client_secret_path().name == "client_secret.json"
+        nested = config.path("google", "school", "token.json")
+        nested.write_text("{}")
+        assert token_path("school") == nested
+        assert token_path("other").name == "other.json"
 
         assert status([]) == "no Google accounts configured"
         assert "not connected" in status(["nobody"])
