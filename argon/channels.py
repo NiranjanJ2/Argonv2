@@ -18,9 +18,11 @@ import asyncio
 import threading
 from collections.abc import Callable
 
-from loguru import logger
+import logging
 
 from argon.config import Discord as DiscordConfig
+
+log = logging.getLogger("argon.discord")
 
 #: Discord refuses anything longer.
 MAX_CHARS = 2000
@@ -75,7 +77,7 @@ class DiscordChannel:
             # indistinguishable from one that failed silently, and "is Discord
             # actually up" should never need a packet capture to answer.
             self.ready = True
-            logger.info("discord connected as {}", client.user)
+            log.info("discord connected as %s", client.user)
 
         @client.event
         async def on_message(message):  # noqa: ANN001
@@ -99,7 +101,7 @@ class DiscordChannel:
                 # A bad token raises in this thread and would otherwise vanish,
                 # leaving a gateway that looks healthy and answers nothing.
                 self.error = f"{type(e).__name__}: {e}"
-                logger.error("discord failed: {}", self.error)
+                log.error("discord failed: %s", self.error)
 
         threading.Thread(target=run, daemon=True, name="discord").start()
 
