@@ -12,11 +12,13 @@ rule that keeps the two from drifting: **state changes are events too.**
 
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 import threading
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +42,10 @@ CREATE TABLE IF NOT EXISTS tasks (
     started_at TEXT,
     source     TEXT NOT NULL DEFAULT 'him',
     created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS facts (
     id         TEXT PRIMARY KEY,
@@ -201,6 +207,43 @@ class Store:
         return [r["text"] for r in rows if not r["until"] or r["until"] >= today]
 
 
+    # -- decisions ---------------------------------------------------------
+    def set_quiet(self, until: datetime, reason: str) -> None:
+        """Record that Argon has committed to silence until *until*.
+
+        This is the model's decision, not a rule imposed on it. Python's only
+        job is to remember it — without somewhere to put the commitment, the
+        agent re-derived it from scratch every tick and announced "standing
+        down" four times in two hours.
+        """
+        with self._lock:
+            self._db.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES ('quiet', ?)",
+                (json.dumps({"until": until.isoformat(), "reason": reason}),))
+            self._db.commit()
+        self._t.append("stood_down", summary=f"until {until:%H:%M} — {reason}"[:200])
+
+    def quiet(self) -> tuple[datetime, str] | None:
+        """The live commitment to silence, or None once it has lapsed."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT value FROM settings WHERE key='quiet'").fetchone()
+        if row is None:
+            return None
+        try:
+            data = json.loads(row["value"])
+            until = datetime.fromisoformat(data["until"])
+        except (json.JSONDecodeError, KeyError, ValueError):
+            return None
+        return (until, data.get("reason", "")) if until > clock.now() else None
+
+    def clear_quiet(self) -> None:
+        with self._lock:
+            self._db.execute("DELETE FROM settings WHERE key='quiet'")
+            self._db.commit()
+        self._t.append("stand_down_cleared")
+
+
 def _task(row: sqlite3.Row) -> Task:
     return Task(id=row["id"], title=row["title"], subject=row["subject"],
                 due=row["due"], priority=row["priority"], done=bool(row["done"]),
@@ -272,6 +315,22 @@ def _selftest() -> None:
         assert sum(r is not None for r in results) == 1, results
         assert [e.payload.get("summary") for e in t.window(2)
                 if e.kind == "task_done"].count("raced") == 1
+
+        # A commitment to silence outlives the turn that made it, and lapses
+        # on its own without anyone having to clear it.
+        assert s.quiet() is None
+        s.set_quiet(clock.now() + timedelta(hours=2), "he asked me to stand down")
+        live = s.quiet()
+        assert live and "stand down" in live[1]
+        assert "stood_down" in [e.kind for e in t.window(2)]
+
+        clock.set_for_test(datetime(2026, 9, 15, 4, 0, tzinfo=clock.TZ))
+        assert s.quiet() is None, "it must lapse on its own"
+
+        clock.set_for_test(datetime(2026, 9, 14, 18, 0, tzinfo=clock.TZ))
+        assert s.quiet() is not None, "and hold until it does"
+        s.clear_quiet()
+        assert s.quiet() is None
 
         clock.set_for_test(None)
     print("store selftest ok")

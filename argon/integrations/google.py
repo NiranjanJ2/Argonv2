@@ -30,12 +30,23 @@ from argon import clock, config
 #: almost nothing — so a single global scope list is wrong and asking the wrong
 #: account returns "insufficient authentication scopes", which reads like a
 #: broken grant rather than a misrouted call.
+#: The scope each capability needs for the call it actually makes — not the
+#: scope that merely sounds related. `classroom` used to be keyed on
+#: `courses.readonly`, which his school account has, while `list_assignments`
+#: calls `courseWork().list()`, which needs `coursework.me.readonly`, which it
+#: does not. Routing said yes and every call came back 403, so Argon spent an
+#: evening telling him Classroom was broken.
 CAPABILITIES: dict[str, str] = {
     "calendar": "https://www.googleapis.com/auth/calendar",
     "tasks": "https://www.googleapis.com/auth/tasks",
-    "classroom": "https://www.googleapis.com/auth/classroom.courses.readonly",
+    "classroom": "https://www.googleapis.com/auth/classroom.coursework.me.readonly",
     "gmail": "https://www.googleapis.com/auth/gmail.readonly",
     "drive": "https://www.googleapis.com/auth/drive.readonly",
+}
+
+#: Alternates that also satisfy a capability.
+EQUIVALENT: dict[str, list[str]] = {
+    "classroom": ["https://www.googleapis.com/auth/classroom.coursework.me"],
 }
 
 #: Requested when authorising a *new* account. Existing grants are never
@@ -90,7 +101,14 @@ def granted(account: str) -> set[str]:
 
 
 def can(account: str, capability: str) -> bool:
-    return CAPABILITIES.get(capability, "") in granted(account)
+    held = granted(account)
+    wanted = [CAPABILITIES.get(capability, "")] + EQUIVALENT.get(capability, [])
+    return any(scope and scope in held for scope in wanted)
+
+
+def missing_scope(capability: str) -> str:
+    """The short name of the scope an account would need. For error messages."""
+    return CAPABILITIES.get(capability, capability).rsplit("/", 1)[-1]
 
 
 def account_for(capability: str, accounts: list[str]) -> str | None:
@@ -336,6 +354,10 @@ def _selftest() -> None:
         write_token("work", [CAPABILITIES["calendar"], CAPABILITIES["tasks"],
                              CAPABILITIES["gmail"]])
         write_token("school", [CAPABILITIES["classroom"], CAPABILITIES["gmail"]])
+        # His real school token: courses + submissions but NOT coursework.
+        write_token("halfschool", [
+            "https://www.googleapis.com/auth/classroom.courses.readonly",
+            "https://www.googleapis.com/auth/classroom.student-submissions.me.readonly"])
         accounts = ["personal", "work", "school"]
 
         assert granted("personal") == {CAPABILITIES["drive"]}
@@ -347,6 +369,14 @@ def _selftest() -> None:
         assert account_for("drive", accounts) == "personal", "first match wins"
         assert account_for("gmail", accounts) == "work", "order decides ties"
         assert account_for("nothing_like_this", accounts) is None
+        # courses.readonly must not pass for classroom: that is the exact
+        # mismatch that produced an evening of 403s.
+        assert not can("halfschool", "classroom")
+        assert account_for("classroom", ["halfschool"]) is None
+        assert missing_scope("classroom") == "classroom.coursework.me.readonly"
+        # The documented alternate scope still satisfies it.
+        write_token("alt", EQUIVALENT["classroom"])
+        assert can("alt", "classroom")
 
         caps = capabilities(accounts)
         assert caps["calendar"] == "work" and caps["classroom"] == "school"

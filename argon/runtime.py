@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import os
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 import time
 from pathlib import Path
 
@@ -79,6 +79,13 @@ class Runtime:
         period = bell.current_period()
         if period:
             parts.append(f"He is in {period} right now.")
+        if (quiet := self.store.quiet()) is not None:
+            until, reason = quiet
+            parts.append(
+                f"YOU ARE STANDING DOWN until {until:%a %H:%M} because: {reason}. "
+                f"You have already told him. Do not tell him again, and do not "
+                f"send anything unless he speaks first or something genuinely new "
+                f"and urgent has happened.")
         return "\n\n".join(parts)
 
     def _refresh_prompt(self) -> None:
@@ -281,8 +288,11 @@ class Runtime:
         def route(capability: str, fn, *args) -> str:
             account = google.account_for(capability, self.cfg.google_accounts)
             if account is None:
-                return (f"No Google account is authorised for {capability}. "
-                        f"Run `argon google-auth <account>` on the server.")
+                return (f"No Google account is authorised for {capability} — none "
+                        f"holds the {google.missing_scope(capability)} scope. "
+                        f"Tell Niranjan to run `argon google-auth <account>` on the "
+                        f"server; nothing you can do will fix it, so say it once "
+                        f"and do not raise it again tonight.")
             return _google(fn, account, *args)
 
         t.add("calendar", "His calendar for the next few days.",
@@ -300,6 +310,28 @@ class Runtime:
         t.add("search_mail", "Search his mail.",
               lambda query: route("gmail", google.search_mail, query),
               params={"query": {"type": "string"}}, required=["query"])
+
+        def stand_down(hours: float = 12, reason: str = "") -> str:
+            if not 0.25 <= hours <= 48:
+                return "Error: hours must be between 0.25 and 48."
+            until = clock.now() + timedelta(hours=float(hours))
+            store.set_quiet(until, reason or "he asked for quiet")
+            return (f"Standing down until {until:%a %H:%M}. You will not be woken "
+                    f"before then. Say it once now; do not repeat it.")
+
+        def resume() -> str:
+            store.clear_quiet()
+            return "back on watch"
+
+        t.add("stand_down",
+              "Commit to silence. Call this when he asks you to back off, or when "
+              "there is nothing you can do until something outside changes. Say so "
+              "once, in the same turn, and then stay quiet — this is remembered, so "
+              "you never need to announce it again.",
+              stand_down,
+              params={"hours": {"type": "number", "description": "how long to stay quiet"},
+                      "reason": {"type": "string"}})
+        t.add("resume", "Come back on watch before the stand-down expires.", resume)
 
         t.add("schedule_today", "Today's bell schedule.", lambda: bell.describe())
         t.add("set_ac", "Change the air conditioner.",
@@ -319,6 +351,12 @@ class Runtime:
     def tick_once(self, *, force: bool = False) -> object | None:
         """One scheduled look.  Returns None when the clock says don't bother."""
         if not force and not schedule.should_tick():
+            return None
+        # A commitment to silence is honoured, not re-litigated. This is not a
+        # gate on judgement: the model made this decision and Python is only
+        # remembering it. He can still reach Argon at any time — an inbound
+        # message goes through `receive`, which never consults this.
+        if not force and self.store.quiet() is not None:
             return None
         # Honour the cadence across restarts. `run()` ticks on entry, so three
         # redeploys in a minute produced three looks seventeen seconds apart and
@@ -381,7 +419,7 @@ def _google(fn, account: str, *args) -> str:
 def _selftest() -> None:
     import os
     import tempfile
-    from datetime import datetime, timedelta
+    from datetime import datetime, timedelta, timedelta
 
     from argon import provider
 
@@ -430,6 +468,16 @@ def _selftest() -> None:
 
         out = rt.receive("hey")
         assert out.spoke is True and sent == ["hello"]
+        # A stand-down suppresses the proactive tick but never a reply to him.
+        assert "Standing down until" in rt.tools.call(
+            "stand_down", {"hours": 3, "reason": "he asked"}, background=True)
+        assert rt.tick_once() is None, "no ticking while stood down"
+        assert "STANDING DOWN" in rt.live_state()
+        scripted.insert(0, provider.Reply(text="still here"))
+        assert rt.receive("you up?").spoke is True, "he can always reach it"
+        assert rt.tools.call("resume", {}, background=True) == "back on watch"
+        assert rt.store.quiet() is None
+        assert rt.tools.call("stand_down", {"hours": 999}, background=True).startswith("Error")
 
         # Outside the window a tick costs nothing at all.
         clock.set_for_test(datetime(2026, 9, 19, 20, 0, tzinfo=clock.TZ))  # Saturday
@@ -442,7 +490,8 @@ def _selftest() -> None:
         assert rt.tools.call("update_task", {"task": "nope"},
                              background=True).startswith("No task matching")
 
-        assert rt.unread() == 1, "the reply above is unread"
+        # Order-independent: earlier checks may have produced replies too.
+        assert rt.unread() >= 1, "replies above are unread"
         rt.mark_read()
         assert rt.unread() == 0
         rt.transcript.append("message_out", text="one")

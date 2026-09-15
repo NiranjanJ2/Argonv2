@@ -93,6 +93,12 @@ def _split(events: list[Event]) -> tuple[list[Event], list[Event]]:
     return events[: cut + 1], events[cut + 1 :]
 
 
+#: How many of its own recent messages the tail quotes back. One was not
+#: enough: it said "standing down" four times in two hours, each time with the
+#: previous one sitting in context but not in front of it.
+RECENT_SAID = 4
+
+
 def _tail(sealed: list[Event], loose: list[Event], extra: str = "") -> dict[str, str]:
     """The clock and the state of play — the only part that moves each tick.
 
@@ -108,8 +114,13 @@ def _tail(sealed: list[Event], loose: list[Event], extra: str = "") -> dict[str,
     else:
         mins = int((now - datetime.fromisoformat(spoke.at)).total_seconds() // 60)
         ago = f"{mins // 60}h {mins % 60}m" if mins >= 60 else f"{mins}m"
-        lines.append(f"You last spoke at {spoke.at[11:16]} ({ago} ago), saying:")
-        lines.append(f"  \"{str(spoke.payload.get('text', ''))[:200]}\"")
+        said = [e for e in (*sealed, *loose) if e.kind == "message_out"][-RECENT_SAID:]
+        lines.append(f"You last spoke at {spoke.at[11:16]} ({ago} ago). "
+                     f"Your recent messages, oldest first:")
+        for e in said:
+            lines.append(f"  [{e.at[11:16]}] \"{str(e.payload.get('text', ''))[:160]}\"")
+        if len(said) > 1:
+            lines.append("If your next message would restate any of those, do not send it.")
         # Anything of his after that message counts, whether it landed in the
         # sealed prefix or the tail. `_split` cuts after the last *spoken*
         # event and his reply is spoken, so when he answered last his message
@@ -204,6 +215,7 @@ def _selftest() -> None:
         # The tail carries the facts the gates used to encode.
         tail = later[-1]["content"]
         assert "18:05" in tail and "has not replied" in tail, tail
+        assert "tonight is tight" in tail, "it must see what it actually said"
         assert "looked 12 time(s)" in tail, tail
 
         # Speaking collapses the tail into the prefix.
