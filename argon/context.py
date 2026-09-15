@@ -13,6 +13,14 @@ Layout::
     [sealed: everything up to and including the last thing Argon said]
     [tail:   what has happened since, plus the clock]
 
+**The prefix is invalidated once a day, at midnight**, when ``window(days)``
+drops the oldest day and every message shifts. That is one full-price call per
+day — about a tenth of a cent — and it is deliberate: the alternative is
+carrying a day he no longer cares about in order to keep a cache warm. The
+first tick after midnight will cost roughly three times a warm one, which is
+normal and not a sign the prefix is drifting. ``budget.cached_fraction`` is the
+thing to watch; a single daily miss barely moves it.
+
 The split is at the last spoken turn rather than at midnight because that is the
 point after which content is still moving.  When Argon speaks, the old tail
 collapses into the sealed prefix and the next tick caches it.
@@ -102,7 +110,14 @@ def _tail(sealed: list[Event], loose: list[Event], extra: str = "") -> dict[str,
         ago = f"{mins // 60}h {mins % 60}m" if mins >= 60 else f"{mins}m"
         lines.append(f"You last spoke at {spoke.at[11:16]} ({ago} ago), saying:")
         lines.append(f"  \"{str(spoke.payload.get('text', ''))[:200]}\"")
-        replied = any(e.kind == "message_in" for e in loose)
+        # Anything of his after that message counts, whether it landed in the
+        # sealed prefix or the tail. `_split` cuts after the last *spoken*
+        # event and his reply is spoken, so when he answered last his message
+        # sits in `sealed` and a tail-only check reported him silent — which is
+        # exactly the input that produces a nudge at someone who did reply.
+        spoke_seq = spoke.seq
+        replied = any(e.kind == "message_in" and e.seq > spoke_seq
+                      for e in (*sealed, *loose))
         lines.append("He has replied since." if replied else "He has not replied since.")
         if mins < 30 and not replied:
             # Quoting it back and naming the consequence, because the bare
@@ -177,6 +192,15 @@ def _selftest() -> None:
         assert first[:-1] == later[:-1], "prefix drifted — every tick would miss cache"
         assert len(first) == len(later), "tick rendering leaked into the prefix"
 
+        # A reply that is the newest row must count as a reply.
+        clock.set_for_test(base + timedelta(minutes=100))
+        t.append("message_out", text="how is the pset going")
+        clock.set_for_test(base + timedelta(minutes=140))
+        t.append("message_in", text="nearly done")
+        clock.set_for_test(base + timedelta(minutes=145))
+        answered = build(t, "SYS")[-1]["content"]
+        assert "He has replied since." in answered, answered
+
         # The tail carries the facts the gates used to encode.
         tail = later[-1]["content"]
         assert "18:05" in tail and "has not replied" in tail, tail
@@ -188,6 +212,16 @@ def _selftest() -> None:
         after = build(t, "SYS")
         assert len(after) > len(later), "a new turn should extend the prefix"
         assert after[-1]["content"].count("looked") == 0, "tick count should reset on speech"
+
+        # Midnight drops the oldest day, so the prefix legitimately changes.
+        # Asserted so the once-daily full-price call is a known cost rather
+        # than a surprise on a bill.
+        before_midnight = build(t, "SYS")
+        clock.set_for_test(datetime(2026, 9, 15, 0, 5, tzinfo=clock.TZ))
+        after_midnight = build(t, "SYS")
+        assert after_midnight != before_midnight, "the window really does roll"
+        assert len(after_midnight) <= len(before_midnight)
+        clock.set_for_test(base + timedelta(minutes=90))
 
         # Observations coalesce rather than fragmenting.
         for i in range(5):

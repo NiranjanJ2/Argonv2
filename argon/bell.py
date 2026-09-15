@@ -132,8 +132,11 @@ def describe(day: date | None = None) -> str:
     name = schedule_for(day)
     if not name:
         return "No school today."
-    entries = SCHEDULES[name]
-    end = entries[-1][2]
+    # The last *class*, not the last entry. early_release ends with a staff
+    # ("Meeting", 1450, 1550) block, so the last entry said school ends 15:50
+    # every Tuesday when he actually leaves at 14:41.
+    classes = [e for e in SCHEDULES[name] if e[0].lower().startswith("period")]
+    end = (classes or SCHEDULES[name])[-1][2]
     return f"{DISPLAY.get(name, name)}; school ends {end // 100}:{end % 100:02d}."
 
 
@@ -156,6 +159,9 @@ def _selftest() -> None:
     assert current_period(dt(2026, 9, 14, 9, 30, tzinfo=clock.TZ)) is None
 
     assert "ends 15:36" in describe(monday), describe(monday)
+    # Tuesday is early release: he leaves after Period 6, not after the
+    # staff meeting that follows it.
+    assert "ends 14:41" in describe(tuesday), describe(tuesday)
     assert describe(saturday) == "No school today."
 
     # Every schedule is ordered and non-overlapping, or current_period lies.

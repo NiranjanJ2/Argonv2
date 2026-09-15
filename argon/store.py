@@ -12,6 +12,7 @@ rule that keeps the two from drifting: **state changes are events too.**
 
 from __future__ import annotations
 
+import re
 import sqlite3
 import threading
 import uuid
@@ -21,6 +22,11 @@ from typing import Any
 
 from argon import clock
 from argon.transcript import Transcript
+
+#: `until` comes from the model as free text. "tomorrow" sorts above every real
+#: date, so a fact set to expire never did. Anything not an ISO date is dropped
+#: and the fact is simply durable, which is the safer of the two mistakes.
+_ISO_DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tasks (
@@ -114,26 +120,38 @@ class Store:
         return [_task(r) for r in rows]
 
     def start_task(self, tid: str) -> Task | None:
-        """He has begun this. Only he can say so — never inferred from a clock."""
-        t = self.task(tid)
-        if t is None or t.done or t.started:
-            return None
+        """He has begun this. Only he can say so — never inferred from a clock.
+
+        The guard is inside the same lock as the write: reading first and
+        writing second let two concurrent calls both pass the check and append
+        two events for one action.
+        """
         with self._lock:
+            row = self._db.execute(
+                "SELECT * FROM tasks WHERE id=? AND done=0 AND started_at IS NULL",
+                (tid,)).fetchone()
+            if row is None:
+                return None
             self._db.execute("UPDATE tasks SET started_at=? WHERE id=?",
                              (clock.now().isoformat(), tid))
             self._db.commit()
-        self._t.append("task_started", id=tid, summary=t.title)
+            title = row["title"]
+        self._t.append("task_started", id=tid, summary=title)
         return self.task(tid)
 
     def complete_task(self, tid: str) -> Task | None:
-        t = self.task(tid)
-        if t is None or t.done:
-            return None
+        """Mark done. Guard and write share one lock, so two concurrent
+        completes cannot both pass and log the task twice."""
         with self._lock:
+            row = self._db.execute(
+                "SELECT * FROM tasks WHERE id=? AND done=0", (tid,)).fetchone()
+            if row is None:
+                return None
             self._db.execute("UPDATE tasks SET done=1, done_at=? WHERE id=?",
                              (clock.now().isoformat(), tid))
             self._db.commit()
-        self._t.append("task_done", id=tid, summary=t.title)
+            title = row["title"]
+        self._t.append("task_done", id=tid, summary=title)
         return self.task(tid)
 
     def update_task(self, tid: str, **changes: Any) -> Task | None:
@@ -161,6 +179,9 @@ class Store:
     # -- facts ------------------------------------------------------------
     def remember(self, text: str, *, standing: bool = False, until: str = "") -> str:
         fid = uuid.uuid4().hex[:12]
+        if until and not _ISO_DAY.match(until.strip()):
+            self._t.append("bad_until", summary=f"ignored until={until!r} on {text[:60]}")
+            until = ""
         with self._lock:
             self._db.execute(
                 "INSERT INTO facts (id,text,standing,until,created_at) VALUES (?,?,?,?,?)",
@@ -221,13 +242,36 @@ def _selftest() -> None:
         s.remember("practice Tuesdays", standing=True)
         s.remember("lab meeting moved", until="2026-09-01")   # expired
         s.remember("essay due soon", until="2026-12-01")
-        assert s.facts() == ["practice Tuesdays", "essay due soon"], s.facts()
+        # Free text sorts above any real date, so it would never expire.
+        s.remember("vague deadline", until="tomorrow")
+        assert s.facts() == ["practice Tuesdays", "essay due soon", "vague deadline"], s.facts()
+        assert "bad_until" in [e.kind for e in t.window(2)]
 
         # Every mutation is visible in the transcript, so the agent sees it.
         kinds = [e.kind for e in t.window(2)]
         assert kinds.count("task_added") == 3
         assert "task_done" in kinds and "remembered" in kinds and "task_updated" in kinds
         assert "task_started" in kinds
+
+        # Concurrent completes must produce exactly one event.
+        import threading
+
+        race = s.add_task("raced")
+        gate = threading.Barrier(6)
+        results: list = []
+
+        def finish() -> None:
+            gate.wait()
+            results.append(s.complete_task(race.id))
+
+        workers = [threading.Thread(target=finish) for _ in range(6)]
+        for w in workers:
+            w.start()
+        for w in workers:
+            w.join()
+        assert sum(r is not None for r in results) == 1, results
+        assert [e.payload.get("summary") for e in t.window(2)
+                if e.kind == "task_done"].count("raced") == 1
 
         clock.set_for_test(None)
     print("store selftest ok")

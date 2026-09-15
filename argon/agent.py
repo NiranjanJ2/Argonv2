@@ -56,10 +56,16 @@ class Agent:
         self.tools = tools
         self.system = system
 
-    def turn(self, *, background: bool) -> Outcome:
-        """Run one turn to completion."""
+    def turn(self, *, background: bool, extra: str = "") -> Outcome:
+        """Run one turn to completion.
+
+        *extra* is live state for the prompt tail. It is a parameter rather
+        than something the caller patches into ``context.build``: the runtime
+        used to swap that module global for the duration of a turn, and two
+        overlapping turns left it pointing at a leaked closure forever.
+        """
         out = Outcome()
-        messages = context.build(self.t, self.system)
+        messages = context.build(self.t, self.system, extra=extra)
         schemas = self.tools.schemas(background=background)
 
         for step in range(MAX_STEPS):
@@ -149,10 +155,10 @@ class Agent:
     def deliver(self, text: str) -> list[str]:  # pragma: no cover - overridden
         return []
 
-    def receive(self, text: str, *, source: str = "ios") -> Outcome:
+    def receive(self, text: str, *, source: str = "ios", extra: str = "") -> Outcome:
         """He said something.  Record it, then answer."""
         self.t.append("message_in", text=text, source=source)
-        return self.turn(background=False)
+        return self.turn(background=False, extra=extra)
 
 
 def _selftest() -> None:

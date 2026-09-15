@@ -60,14 +60,46 @@ final class OutboxTests: XCTestCase {
     await reborn.clear()
   }
 
-  func testExhaustionIsBounded() async {
+  func testExhaustionIsReportedOnTheTenthAttempt() async {
     let outbox = ArgonOutbox(filename: tempName("exhaust"))
     let write = await outbox.enqueue(.start(taskID: "t1"))
-    XCTAssertFalse(write.isExhausted)
-    for _ in 0..<10 { await outbox.recordAttempt(write.id) }
-    let after = await outbox.pending.first
-    XCTAssertTrue(after!.isExhausted, "a write must not retry forever")
+    var spentAfter = 0
+    for n in 1...10 {
+      if await outbox.recordAttempt(write.id) { spentAfter = n; break }
+    }
+    // The caller holds a pre-increment snapshot, so asking the write itself
+    // gave up one attempt late. recordAttempt reports the post-increment truth.
+    XCTAssertEqual(spentAfter, 10, "must be spent on the tenth, not the eleventh")
     await outbox.clear()
+  }
+}
+
+// MARK: - URL construction
+
+final class URLTests: XCTestCase {
+  /// The bug this exists for: `appendingPathComponent` percent-encodes `?`,
+  /// so `v2/messages?since=7` was requested as `v2/messages%3Fsince=7` and the
+  /// server answered 404 — freezing the board on the disk cache forever.
+  func testQueryIsAQueryAndNotPartOfThePath() async {
+    let client = ArgonClient(base: URL(string: "http://host")!, token: "t")
+    let plain = await client.url(path: "v2/messages")
+    let paged = await client.url(path: "v2/messages", query: ["since": "7"])
+
+    XCTAssertEqual(plain.absoluteString, "http://host/v2/messages")
+    XCTAssertEqual(paged.absoluteString, "http://host/v2/messages?since=7")
+    XCTAssertFalse(paged.absoluteString.contains("%3F"), "the ? must not be encoded")
+    XCTAssertEqual(paged.path, "/v2/messages", "query must not leak into the path")
+    XCTAssertEqual(paged.query, "since=7")
+  }
+
+  func testIncrementalReadActuallyHitsTheRightURL() async throws {
+    StubProtocol.reset()
+    StubProtocol.handler = { _ in (200, Data(#"{"messages":[],"unread":0}"#.utf8)) }
+    let client = ArgonClient(base: URL(string: "http://host")!, token: "t",
+                             session: StubProtocol.session)
+    _ = try await client.messages(since: 42)
+    XCTAssertEqual(StubProtocol.seen, ["GET /v2/messages"],
+                   "a 404 here is what froze every refresh after the first message")
   }
 }
 
@@ -98,6 +130,8 @@ final class StoreTests: XCTestCase {
 
   override func setUp() { StubProtocol.reset() }
 
+  /// Asserts the screen changes *before* the round trip. The previous version
+  /// of this test passed with the entire optimistic-write feature deleted.
   func testCompletingATaskShowsImmediately() async {
     StubProtocol.handler = { request in
       request.url!.path.contains("state") ? (200, Data(stateJSON.utf8))
@@ -107,12 +141,54 @@ final class StoreTests: XCTestCase {
     await store.refresh()
     XCTAssertEqual(store.state.sortedTasks.count, 2)
 
-    await store.complete(store.state.sortedTasks[0])
-    // The server stub still returns both open, but the write succeeded, so the
-    // reconcile is what decides — and it must not resurrect a completed task
-    // before the server has caught up.
-    XCTAssertEqual(store.pendingCount, 0, "write drained")
-    XCTAssertTrue(StubProtocol.seen.contains("PATCH /v1/tasks/t1"))
+    // Hang every write, so nothing can have reached the server yet.
+    let gate = DispatchSemaphore(value: 0)
+    StubProtocol.handler = { request in
+      if request.httpMethod != "GET" { gate.wait() }
+      return request.url!.path.contains("state") ? (200, Data(stateJSON.utf8))
+                                                 : (200, Data(#"{"messages":[],"unread":0}"#.utf8))
+    }
+    let target = store.state.sortedTasks[0]
+    let work = Task { await store.complete(target) }
+    // Give the optimistic mutation a moment; the network is still blocked.
+    try? await Task.sleep(nanoseconds: 120_000_000)
+    XCTAssertTrue(store.state.tasks.first { $0.id == target.id }!.done,
+                  "the tap must change the screen, not the round trip")
+    gate.signal()
+    await work.value
+  }
+
+  func testOverlappingFlushesDoNotSendTheSameWriteTwice() async {
+    StubProtocol.handler = { request in
+      request.url!.path.contains("state") ? (200, Data(stateJSON.utf8))
+                                          : (200, Data(#"{"messages":[],"unread":0}"#.utf8))
+    }
+    let store = makeStore(label: "doubleflush")
+    await store.refresh()
+    StubProtocol.seen = []
+
+    // Foregrounding, a silent push and the background task can all land at once.
+    await store.add(title: "Buy milk")
+    async let a: Void = store.refresh()
+    async let b: Void = store.refresh()
+    async let c: Void = store.flush()
+    _ = await (a, b, c)
+
+    let posts = StubProtocol.seen.filter { $0 == "POST /v1/tasks" }
+    XCTAssertEqual(posts.count, 1, "a queued write must be applied exactly once")
+  }
+
+  func testRepeatedTextRetiresOneEchoPerArrival() async {
+    StubProtocol.handler = { request in
+      if request.url!.path.contains("state") { return (200, Data(stateJSON.utf8)) }
+      if request.httpMethod == "POST" { return (200, Data(#"{"reply":"","spoke":true}"#.utf8)) }
+      return (200, Data(#"{"messages":[{"seq":1,"role":"user","text":"ok","at":null}],"unread":0}"#.utf8))
+    }
+    let store = makeStore(label: "echo")
+    store.stageForTest(pendingTexts: ["ok", "ok"])
+    await store.refresh()
+    XCTAssertEqual(store.messages.filter { $0.text == "ok" }.count, 2,
+                   "one server copy retires one echo, not both")
   }
 
   func testAPermanentRejectionIsSurfacedNotSwallowed() async {

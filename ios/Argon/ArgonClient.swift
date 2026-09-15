@@ -64,10 +64,27 @@ actor ArgonClient {
 
   var endpoint: URL { base }
 
+  /// Build the URL for a path plus optional query.
+  ///
+  /// Not `appendingPathComponent`: it percent-encodes `?` into `%3F`, so
+  /// `v2/messages?since=7` was requested as `v2/messages%3Fsince=7` and the
+  /// server answered 404. Every refresh after the first message failed, and
+  /// because the read is inside a concurrent `try await`, the whole state
+  /// update was skipped — the board simply froze on the disk cache.
+  func url(path: String, query: [String: String] = [:]) -> URL {
+    var components = URLComponents(url: base.appendingPathComponent(path),
+                                   resolvingAgainstBaseURL: false)
+    if !query.isEmpty {
+      components?.queryItems = query.map { URLQueryItem(name: $0.key, value: $0.value) }
+    }
+    return components?.url ?? base.appendingPathComponent(path)
+  }
+
   private func request(_ path: String, method: String = "GET",
+                       query: [String: String] = [:],
                        body: [String: Any]? = nil,
                        timeout: TimeInterval = 20) async throws -> Data {
-    var req = URLRequest(url: base.appendingPathComponent(path))
+    var req = URLRequest(url: url(path: path, query: query))
     req.httpMethod = method
     req.timeoutInterval = timeout
     req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -109,8 +126,9 @@ actor ArgonClient {
   /// numbers rather than timestamps, so the phone and server never need to
   /// agree about a clock.
   func messages(since: Int? = nil) async throws -> ArgonMessagesResponse {
-    let path = since.map { "v2/messages?since=\($0)" } ?? "v2/messages"
-    return try decode(ArgonMessagesResponse.self, from: await request(path))
+    let query = since.map { ["since": String($0)] } ?? [:]
+    return try decode(ArgonMessagesResponse.self,
+                      from: await request("v2/messages", query: query))
   }
 
   // MARK: writes — one per PendingWrite.Kind, all returning or throwing

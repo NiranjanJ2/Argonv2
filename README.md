@@ -47,6 +47,10 @@ five-minute cadence that is ~$3/month instead of ~$11. `context.py`'s self-check
 asserts the prefix does not drift, because it breaks silently and you find out
 on a bill.
 
+The prefix is invalidated once a day at midnight, when the two-day window drops
+its oldest day. That is one full-price call per day, on purpose — keeping the
+cache warm is not worth carrying a day he has stopped caring about.
+
 **Restraint is information, not a gate.** The agent reads that it spoke at 18:05
 and has not been answered. `max_per_day` is gone. So is the occasion table.
 

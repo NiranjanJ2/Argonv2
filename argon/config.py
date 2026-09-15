@@ -20,14 +20,59 @@ from typing import Any, get_type_hints
 
 
 def home() -> Path:
-    """The data root.  Everything mutable lives under here."""
-    return Path(os.environ.get("ARGON_HOME") or Path.home() / ".argon2")
+    """The data root.  Everything mutable lives under here.
+
+    Created 0700: it holds the model key, the Discord bot token, the API
+    bearer token and the APNs signing key. The box also runs deliberately
+    vulnerable web apps for security research, so "any other account can read
+    it" is not theoretical here.
+    """
+    root = Path(os.environ.get("ARGON_HOME") or Path.home() / ".argon2")
+    if not root.exists():
+        root.mkdir(parents=True, mode=0o700, exist_ok=True)
+    return root
 
 
 def path(*parts: str) -> Path:
     p = home().joinpath(*parts)
-    p.parent.mkdir(parents=True, exist_ok=True)
+    p.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
     return p
+
+
+def secure(target: Path) -> Path:
+    """Tighten a file to 0600. Safe to call on one that does not exist yet."""
+    try:
+        if target.exists():
+            target.chmod(0o600)
+    except OSError:
+        pass
+    return target
+
+
+def harden() -> list[str]:
+    """Lock down the data root and everything sensitive in it.
+
+    Run at startup rather than only at creation, so an install that predates
+    this — or a file written by hand — gets fixed rather than staying open.
+    """
+    fixed: list[str] = []
+    root = home()
+    try:
+        if root.stat().st_mode & 0o077:
+            root.chmod(0o700)
+            fixed.append(str(root))
+    except OSError:
+        pass
+    for pattern in ("config.json", "spend.json", "device_token",
+                    "apns/*.p8", "google/*.json"):
+        for target in root.glob(pattern):
+            try:
+                if target.is_file() and target.stat().st_mode & 0o077:
+                    target.chmod(0o600)
+                    fixed.append(str(target))
+            except OSError:
+                pass
+    return fixed
 
 
 @dataclass
@@ -74,7 +119,8 @@ class Apns:
 @dataclass
 class Api:
     host: str = "0.0.0.0"
-    port: int = 3995
+    #: 3997, not 3995: v1 holds 3995 and the two run side by side.
+    port: int = 3997
     #: Bearer token for every route except /health.  Empty disables the server
     #: rather than serving it open.
     token: str = ""
@@ -138,6 +184,16 @@ def _selftest() -> None:
         assert c.monthly_cap_usd == 12.0
         assert c.discord.enabled is False and c.discord.allow_from == []
         assert path("a", "b.json").parent.exists(), "path() makes parents"
+        assert load().api.port == 3997, "must not collide with v1 on 3995"
+
+        # Secrets must not be world-readable, and harden() fixes an old install.
+        assert home().stat().st_mode & 0o077 == 0, "data root must be 0700"
+        leaky = path("config.json")
+        leaky.write_text("{}")
+        leaky.chmod(0o644)
+        assert str(leaky) in harden()
+        assert leaky.stat().st_mode & 0o077 == 0, "config.json must be 0600"
+        assert harden() == [], "nothing left to fix on a second pass"
         del os.environ["ARGON_HOME"]
     print("config selftest ok")
 

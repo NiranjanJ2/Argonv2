@@ -13,6 +13,7 @@ the model, which is the entire point of the rewrite.
 from __future__ import annotations
 
 import json
+import os
 import threading
 from datetime import datetime
 import time
@@ -53,8 +54,13 @@ class Runtime:
         self.agent = Agent(self.cfg, self.transcript, self.store, self.tools,
                            system_prompt())
         self.agent.deliver = self.deliver
+        self._prompt_day = clock.day_key()
         self._channels: list = []
         self._stop = threading.Event()
+        # One turn at a time. The Flask thread, the tick loop and the Discord
+        # worker are three entry points into the same agent; without this they
+        # overlap, double the spend on one moment, and interleave their rows.
+        self._turn_lock = threading.Lock()
         self._register_tools()
 
     # -- live state -------------------------------------------------------
@@ -75,20 +81,25 @@ class Runtime:
             parts.append(f"He is in {period} right now.")
         return "\n\n".join(parts)
 
+    def _refresh_prompt(self) -> None:
+        """Rebuild the system prompt when the day turns over.
+
+        It carries the date and today's bell schedule, and the service runs for
+        weeks at a time — without this a Friday daemon still tells the model it
+        is the Monday it booted on.
+        """
+        today = clock.day_key()
+        if today != self._prompt_day:
+            self.agent.system = system_prompt()
+            self._prompt_day = today
+
     def turn(self, *, background: bool) -> object:
-        """One turn with live state attached.  Wraps Agent.turn so every entry
-        point — tick, chat, webhook — gets the same picture."""
-        original = context.build
-
-        def with_state(t, system, **kw):
-            kw["extra"] = self.live_state()
-            return original(t, system, **kw)
-
-        context.build = with_state  # type: ignore[assignment]
-        try:
-            return self.agent.turn(background=background)
-        finally:
-            context.build = original  # type: ignore[assignment]
+        """One turn with live state attached. Every entry point — tick, chat,
+        webhook — goes through here, so they all get the same picture and they
+        queue rather than overlap."""
+        with self._turn_lock:
+            self._refresh_prompt()
+            return self.agent.turn(background=background, extra=self.live_state())
 
     def receive(self, text: str, *, source: str = "ios") -> object:
         self.transcript.append("message_in", text=text, source=source)
@@ -103,6 +114,13 @@ class Runtime:
         but the caller has to be told, or `say` reports success for a message
         that reached nobody.
         """
+        if not self._channels:
+            # No channel at all is a total delivery failure, not a quiet
+            # success. Returning [] here let `say` record a message_out for
+            # something nobody could possibly have received.
+            self.transcript.append("delivery_failed", summary="no channels attached")
+            return ["no channel is attached"]
+
         errors: list[str] = []
         for channel in self._channels:
             name = getattr(channel, "__self__", channel)
@@ -149,16 +167,23 @@ class Runtime:
         return p.read_text().strip() if p.exists() else ""
 
     def push_channel(self, text: str) -> None:
-        """Deliver to the phone. A dead token is recorded, never acted on here:
-        which environment the installed build uses decides whether the reason
-        means anything, and this code does not know that."""
+        """Deliver to the phone. Raises when it could not.
+
+        A dead token is reported, never acted on here: which environment the
+        installed build uses decides whether the reason means anything, and
+        this code does not know that. Returning quietly when APNs is off or no
+        device is registered would report every message as delivered.
+        """
+        if not self.cfg.apns.enabled:
+            raise RuntimeError("apns is disabled")
         token = self.device_token()
-        if not token or not self.cfg.apns.enabled:
-            return
+        if not token:
+            raise RuntimeError("no device registered for push")
         result = self.push.alert(token, text)
         if not result.ok:
             self.transcript.append("push_failed",
                                    summary=f"{result.status} {result.reason}")
+            raise RuntimeError(f"apns {result.status} {result.reason}")
 
     def remember_discord_channel(self, channel_id: str) -> None:
         """Write the channel he last used back to config, so a restart still
@@ -167,9 +192,21 @@ class Runtime:
         try:
             data = json.loads(path.read_text()) if path.exists() else {}
             data.setdefault("discord", {})["channel_id"] = channel_id
-            path.write_text(json.dumps(data, indent=2))
-        except OSError as e:
+            # Write-then-rename. This file holds the model key, the bot token
+            # and the API bearer token; `write_text` truncates first, so a kill
+            # mid-write would destroy all three.
+            tmp = path.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(data, indent=2))
+            tmp.chmod(0o600)
+            os.replace(tmp, path)
+        except (OSError, json.JSONDecodeError) as e:
+            # A hand-edited config with a trailing comma used to raise straight
+            # into the Discord worker.
             self.transcript.append("config_write_failed", summary=str(e))
+            return
+        # Keep the running process in step; it used to hold the old target
+        # until the next restart.
+        self.cfg.discord.channel_id = channel_id
 
     def ac_units(self) -> list[dict]:
         return [u.as_dict() for u in self.ac.units.values()]
@@ -291,14 +328,32 @@ class Runtime:
             since = (clock.now() - datetime.fromisoformat(last.at)).total_seconds()
             if since < schedule.TICK_MINUTES * 60:
                 return None
-        notice = budget.take_notification(self.cfg.monthly_cap_usd)
-        if notice:
-            # Sent directly: there is no budget left to ask the model to phrase it.
-            self.transcript.append("message_out", text=notice)
-            self.deliver(notice)
+        if self._announce_budget_stop():
             return None
         self.transcript.append("tick")
         return self.turn(background=True)
+
+    def _announce_budget_stop(self) -> bool:
+        """Tell him the budget is gone, if it is. Returns True when capped.
+
+        Sent directly rather than through the model — there is no budget left
+        to ask it to phrase this. It is also the only send that bypasses
+        `Agent.say`, so it has to check delivery itself: recording a
+        `message_out` blind, after `take_notification` has already burnt its
+        once-a-month flag, means he is never told at all.
+        """
+        notice = budget.take_notification(self.cfg.monthly_cap_usd)
+        if not notice:
+            return budget.month()["usd"] >= self.cfg.monthly_cap_usd
+        errors = self.deliver(notice)
+        if errors:
+            # Put the flag back so the next tick tries again.
+            budget.rearm_notification()
+            self.transcript.append("undelivered", text=notice,
+                                   summary="; ".join(errors)[:200])
+        else:
+            self.transcript.append("message_out", text=notice)
+        return True
 
     def run(self) -> None:
         """Tick until stopped."""

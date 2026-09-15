@@ -9,3 +9,6 @@ __pycache__/
 
 .build/
 .swiftpm/
+
+# never the real one — config.sample.json is the template
+config.json

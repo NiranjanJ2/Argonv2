@@ -16,6 +16,9 @@ def cmd_gateway(args) -> int:
     from argon.channels import DiscordChannel
     from argon.runtime import Runtime
 
+    for fixed in config.harden():
+        print(f"tightened permissions on {fixed}")
+
     rt = Runtime()
     if rt.cfg.apns.enabled:
         rt.add_channel(rt.push_channel)
@@ -119,6 +122,9 @@ def cmd_doctor(args) -> int:
     rt = Runtime()
     cfg = rt.cfg
     print(f"home           {config.home()}")
+    loose = config.harden()
+    _section("permissions", lambda: "ok" if not loose
+             else "tightened " + ", ".join(loose))
     print(f"now            {clock.now():%Y-%m-%d %H:%M %Z} (ticking: {schedule.should_tick()})")
 
     month = budget.month()

@@ -91,7 +91,11 @@ class DiscordChannel:
             # everybody — an open bot on a public server answers strangers.
             if str(message.author.id) not in self.cfg.allow_from:
                 return
-            if self._channel_id != message.channel.id:
+            # Only follow him into a private channel. Argon's briefs name his
+            # assignments and his evening; one message from a public guild
+            # channel would have redirected the next one there.
+            private = getattr(message.guild, "id", None) is None
+            if private and self._channel_id != message.channel.id:
                 self._channel_id = message.channel.id
                 if self.remember:
                     self.remember(str(message.channel.id))

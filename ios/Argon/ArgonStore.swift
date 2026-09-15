@@ -44,6 +44,10 @@ final class ArgonStore {
   private let client: ArgonClient
   private let outbox: ArgonOutbox
   private let cache: ArgonCache
+  /// Guards the queue drain. `refresh()` and `enqueue()` both flush, and
+  /// foregrounding plus a silent push plus the background task can land
+  /// together — two concurrent drains posted the same queued task twice.
+  private var flushing = false
   private var highestSeq: Int? { messages.filter { !$0.pending }.map(\.seq).max() }
 
   init(client: ArgonClient, outbox: ArgonOutbox = ArgonOutbox(), cache: ArgonCache = ArgonCache()) {
@@ -90,9 +94,15 @@ final class ArgonStore {
 
   private func merge(_ incoming: [ArgonMessage]) {
     guard !incoming.isEmpty else { return }
-    // Retire the local echo once the server's own copy of it arrives.
-    let arrived = Set(incoming.map(\.text))
-    messages.removeAll { $0.pending && arrived.contains($0.text) }
+    // Retire one local echo per arriving copy. Matching on text alone retired
+    // *every* pending echo with that text, so sending "ok" twice lost one of
+    // them from the view until a full reload.
+    var unmatched = incoming.reduce(into: [String: Int]()) { $0[$1.text, default: 0] += 1 }
+    messages.removeAll { message in
+      guard message.pending, let left = unmatched[message.text], left > 0 else { return false }
+      unmatched[message.text] = left - 1
+      return true
+    }
 
     let known = Set(messages.filter { !$0.pending }.map(\.seq))
     let settled = (messages.filter { !$0.pending }
@@ -186,14 +196,18 @@ final class ArgonStore {
   /// order — completing a task the server has not been told about yet would be
   /// rejected for the wrong reason.
   func flush() async {
+    guard !flushing else { return }
+    flushing = true
+    defer { flushing = false }
+
     for write in await outbox.pending {
       do {
         try await client.apply(write)
         await outbox.remove(write.id)
         failure = nil
       } catch let error as ArgonClient.Failure where error.isTransient {
-        await outbox.recordAttempt(write.id)
-        if write.isExhausted {
+        let spent = await outbox.recordAttempt(write.id)
+        if spent {
           await outbox.remove(write.id)
           failure = "Gave up \(write.describedForHim). \(error.errorDescription ?? "")"
         }
@@ -210,4 +224,9 @@ final class ArgonStore {
   }
 
   func dismissFailure() { failure = nil }
+
+  /// Test hook: seed pending echoes without a network round trip.
+  func stageForTest(pendingTexts: [String]) {
+    messages.append(contentsOf: pendingTexts.map { .local(role: "user", text: $0) })
+  }
 }

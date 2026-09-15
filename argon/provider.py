@@ -51,12 +51,20 @@ def _post(url: str, key: str, body: dict, timeout: float) -> dict:
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
-            return json.loads(r.read())
+            body = r.read()
     except urllib.error.HTTPError as e:
         detail = e.read().decode()[:400]
         raise ProviderError(f"HTTP {e.code}: {detail}") from e
     except (urllib.error.URLError, TimeoutError, OSError) as e:
         raise ProviderError(f"unreachable: {e}") from e
+
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError as e:
+        # A captive portal, a proxy error page or a truncated body arrives as
+        # 200 with HTML. Decoding outside the guard let that escape the whole
+        # turn as an unhandled exception.
+        raise ProviderError(f"bad response body: {body[:200]!r}") from e
 
 
 def _retryable(exc: ProviderError) -> bool:
@@ -142,6 +150,7 @@ def _selftest() -> None:
         assert _retryable(ProviderError("unreachable: timed out"))
         assert not _retryable(ProviderError("HTTP 400: bad request")), "400 will fail again"
         assert not _retryable(ProviderError("HTTP 401: bad key"))
+        assert not _retryable(ProviderError("bad response body: b'<html>'"))
 
         assert _usage({"usage": {"prompt_tokens": 18000, "completion_tokens": 150,
                                  "prompt_tokens_details": {"cached_tokens": 13000}}}

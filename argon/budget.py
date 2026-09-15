@@ -18,6 +18,8 @@ and the bill is about to triple.
 from __future__ import annotations
 
 import json
+import os
+import threading
 from dataclasses import dataclass
 
 from argon import clock, config
@@ -55,10 +57,9 @@ def price_of(model: str) -> tuple[float, float, float] | None:
 
 
 def cost_of(model: str, usage: Usage) -> float:
-    rates = price_of(model)
-    if rates is None:
-        return 0.0
-    fresh_in, out, cached_in = rates
+    """What one call cost. An unlisted model is charged at the highest known
+    rate rather than nothing — see UNKNOWN_MODEL_RATES."""
+    fresh_in, out, cached_in = price_of(model) or UNKNOWN_MODEL_RATES
     fresh = max(0, usage.prompt - usage.cached)
     return (
         fresh * fresh_in / 1e6
@@ -67,24 +68,44 @@ def cost_of(model: str, usage: Usage) -> float:
     )
 
 
+#: Every read-modify-write of the spend file happens under this. Four threads
+#: recording concurrently lost 598 of 800 calls without it — and an under-count
+#: means the hard cap silently stops holding.
+_lock = threading.RLock()
+
+
 def _file():
     return config.path("spend.json")
 
 
 def _read() -> dict:
     p = _file()
-    return json.loads(p.read_text()) if p.exists() else {}
+    if not p.exists():
+        return {}
+    try:
+        return json.loads(p.read_text())
+    except (json.JSONDecodeError, OSError):
+        # A torn or hand-mangled file must not take the agent down. Starting
+        # the month's count again is wrong, but wrong and running beats
+        # raising out of every model call until someone deletes the file.
+        return {}
 
 
 def _write(data: dict) -> None:
-    _file().write_text(json.dumps(data, indent=2, sort_keys=True))
+    # Write-then-rename: `write_text` truncates first, so a crash mid-write
+    # leaves the file unparseable and a concurrent reader sees half a document.
+    target = _file()
+    tmp = target.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, indent=2, sort_keys=True))
+    os.replace(tmp, target)
 
 
 def month() -> dict:
     """This month's totals."""
     key = clock.now().strftime("%Y-%m")
-    return _read().get(key) or {"usd": 0.0, "calls": 0, "prompt": 0, "cached": 0,
-                                "notified": False}
+    with _lock:
+        return _read().get(key) or {"usd": 0.0, "calls": 0, "prompt": 0, "cached": 0,
+                                    "notified": False}
 
 
 def cached_fraction() -> float:
@@ -102,10 +123,15 @@ def remaining(cap: float) -> float:
     return max(0.0, cap - month()["usd"])
 
 
+#: Charged for a model absent from PRICES. A typo in config.json, or the
+#: provider renaming a model, used to make every call free and the ceiling
+#: meaningless. Assuming the priciest known rate keeps the cap real and errs
+#: toward stopping early rather than spending unbounded.
+UNKNOWN_MODEL_RATES = max(PRICES.values())
+
+
 def check(cap: float, model: str) -> None:
     """Raise ``BudgetExceeded`` if this call must not happen."""
-    if price_of(model) is None:
-        return  # unmetered: never blocked
     spent = month()["usd"]
     if spent >= cap:
         raise BudgetExceeded(f"monthly cap reached (${spent:.2f} of ${cap:.2f})")
@@ -115,14 +141,15 @@ def record(model: str, usage: Usage) -> float:
     """Add one call to the month.  Returns its cost."""
     cost = cost_of(model, usage)
     key = clock.now().strftime("%Y-%m")
-    data = _read()
-    m = data.setdefault(key, {"usd": 0.0, "calls": 0, "prompt": 0, "cached": 0,
-                              "notified": False})
-    m["usd"] = round(m["usd"] + cost, 6)
-    m["calls"] += 1
-    m["prompt"] += usage.prompt
-    m["cached"] += usage.cached
-    _write(data)
+    with _lock:
+        data = _read()
+        m = data.setdefault(key, {"usd": 0.0, "calls": 0, "prompt": 0, "cached": 0,
+                                  "notified": False})
+        m["usd"] = round(m["usd"] + cost, 6)
+        m["calls"] += 1
+        m["prompt"] += usage.prompt
+        m["cached"] += usage.cached
+        _write(data)
     return cost
 
 
@@ -134,17 +161,32 @@ def take_notification(cap: float) -> str | None:
     whole rewrite is meant to end — including when the spammer is the budget.
     """
     key = clock.now().strftime("%Y-%m")
-    data = _read()
-    m = data.get(key)
-    if not m or m["usd"] < cap or m.get("notified"):
-        return None
-    m["notified"] = True
-    _write(data)
+    with _lock:
+        data = _read()
+        m = data.get(key)
+        if not m or m["usd"] < cap or m.get("notified"):
+            return None
+        m["notified"] = True
+        _write(data)
     return (
         f"I've hit the ${cap:.0f} model budget for this month (${m['usd']:.2f} over "
         f"{m['calls']} calls). I'm going quiet until the 1st — text me and I still "
         f"won't answer. Raise the cap in config.json if you want me back."
     )
+
+
+def rearm_notification() -> None:
+    """Undo `take_notification` when the message could not be delivered.
+
+    Without this, a failed send burns the once-a-month flag and he is never
+    told the budget ran out — the one message it is least acceptable to lose.
+    """
+    key = clock.now().strftime("%Y-%m")
+    with _lock:
+        data = _read()
+        if key in data:
+            data[key]["notified"] = False
+            _write(data)
 
 
 def _selftest() -> None:
@@ -162,8 +204,17 @@ def _selftest() -> None:
         assert abs(fresh - 0.00378) < 1e-5, fresh
         assert warm < fresh / 2, (warm, fresh)
 
-        assert cost_of("who-knows", Usage(prompt=10**9)) == 0.0, "unmetered is free"
-        check(5.0, "who-knows")  # and never blocked
+        # An unlisted model is charged at the dearest known rate, not zero.
+        # Charging zero made a one-character typo in config.json silently
+        # remove the ceiling entirely.
+        assert cost_of("who-knows", Usage(prompt=1_000_000)) == max(PRICES.values())[0]
+        record("who-knows", Usage(prompt=40_000_000))
+        try:
+            check(5.0, "who-knows")
+            raise AssertionError("an unknown model must still hit the cap")
+        except BudgetExceeded:
+            pass
+        _write({})  # reset for the rest of the checks
 
         for _ in range(10):
             record("gpt-5.6-luna", Usage(prompt=18_000, completion=150, cached=13_000))
@@ -183,12 +234,35 @@ def _selftest() -> None:
             pass
         assert take_notification(5.0) is not None, "must announce once"
         assert take_notification(5.0) is None, "must not announce twice"
+        rearm_notification()
+        assert take_notification(5.0) is not None, "an undelivered notice is retried"
         assert remaining(5.0) == 0.0
 
         # A new month starts clean.
         clock.set_for_test(datetime(2026, 10, 1, 9, 0, tzinfo=clock.TZ))
         assert month()["usd"] == 0.0 and month()["notified"] is False
         check(5.0, "gpt-5.6-luna")
+
+        # Concurrent recording must not lose calls: the spend file is shared
+        # mutable state, and an under-count means the hard cap stops holding.
+        import threading
+
+        _write({})
+        clock.set_for_test(datetime(2026, 9, 14, 18, 0, tzinfo=clock.TZ))
+        start = threading.Barrier(4)
+
+        def hammer() -> None:
+            start.wait()
+            for _ in range(50):
+                record("gpt-5.6-luna", Usage(prompt=1000, completion=10))
+
+        threads = [threading.Thread(target=hammer) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert month()["calls"] == 200, f"lost writes: {month()['calls']} of 200"
+        assert month()["prompt"] == 200_000
 
         clock.set_for_test(None)
         del os.environ["ARGON_HOME"]

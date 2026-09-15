@@ -76,10 +76,16 @@ actor ArgonOutbox {
     save()
   }
 
-  func recordAttempt(_ id: UUID) {
-    guard let i = queue.firstIndex(where: { $0.id == id }) else { return }
+  /// Record a failed attempt and report whether the write is now spent.
+  /// Returning the post-increment verdict matters: the caller held a
+  /// pre-increment snapshot, so checking `write.isExhausted` gave up after
+  /// eleven attempts rather than the documented ten.
+  @discardableResult
+  func recordAttempt(_ id: UUID) -> Bool {
+    guard let i = queue.firstIndex(where: { $0.id == id }) else { return false }
     queue[i].attempts += 1
     save()
+    return queue[i].isExhausted
   }
 
   func clear() {
