@@ -12,6 +12,7 @@ the model, which is the entire point of the rewrite.
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 from pathlib import Path
@@ -141,6 +142,17 @@ class Runtime:
         if not result.ok:
             self.transcript.append("push_failed",
                                    summary=f"{result.status} {result.reason}")
+
+    def remember_discord_channel(self, channel_id: str) -> None:
+        """Write the channel he last used back to config, so a restart still
+        knows where to deliver."""
+        path = config.home() / "config.json"
+        try:
+            data = json.loads(path.read_text()) if path.exists() else {}
+            data.setdefault("discord", {})["channel_id"] = channel_id
+            path.write_text(json.dumps(data, indent=2))
+        except OSError as e:
+            self.transcript.append("config_write_failed", summary=str(e))
 
     def ac_units(self) -> list[dict]:
         return [u.as_dict() for u in self.ac.units.values()]

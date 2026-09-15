@@ -51,6 +51,10 @@ class Discord:
     token: str = ""
     #: Only these user ids may talk to Argon.  Empty means nobody.
     allow_from: list[str] = field(default_factory=list)
+    #: Where to deliver when he has not spoken yet.  Without this a fresh
+    #: install has nowhere to send the first brief, and it goes nowhere
+    #: silently — which is how two days of check-ins were lost once before.
+    channel_id: str = ""
 
 
 @dataclass

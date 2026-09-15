@@ -21,7 +21,9 @@ def cmd_gateway(args) -> int:
         rt.add_channel(rt.push_channel)
     discord = None
     if rt.cfg.discord.enabled and rt.cfg.discord.token:
-        discord = DiscordChannel(rt.cfg.discord, lambda text: rt.receive(text, source="discord"))
+        discord = DiscordChannel(rt.cfg.discord,
+                                 lambda text: rt.receive(text, source="discord"),
+                                 remember=rt.remember_discord_channel)
         discord.start()
         rt.add_channel(discord.send)
         # Wait briefly for the login to resolve so the banner tells the truth
