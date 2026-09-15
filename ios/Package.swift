@@ -2,21 +2,29 @@
 import PackageDescription
 
 // The sync layer is pure Foundation, so it builds and tests on the Mac without
-// a simulator. The UI and the iOS-only frameworks are excluded — they are
-// typechecked against the iOS SDK by check.sh instead.
+// a simulator. It points at the files inside the app rather than a second copy
+// of them: two directories of the same Swift is exactly the drift this rewrite
+// exists to end. Sources are listed explicitly rather than excluded: a new file
+// in Argon/ should not silently join this target and drag UIKit,
+// DeviceActivity or FamilyControls in with it. The UI and the iOS-only
+// frameworks are typechecked against the real SDK by ../check.sh instead.
 let package = Package(
   name: "ArgonSync",
   platforms: [.macOS(.v14)],
   targets: [
     .target(
       name: "ArgonSync",
-      path: "Argon",
-      exclude: [
-        "ArgonAppDelegate.swift", "ArgonPush.swift", "ArgonRoutineActivity.swift",
-        "ArgonRootView.swift", "ArgonTodayView.swift", "ArgonChatView.swift",
-        "ArgonSettingsView.swift",
+      path: "app/Foqos/Argon",
+      sources: [
+        "ArgonModels.swift",
+        "ArgonClient.swift",
+        "ArgonStore.swift",
+        "ArgonOutbox.swift",
+        "ArgonCache.swift",
+        "ArgonSnapshot.swift",
       ]
     ),
-    .testTarget(name: "ArgonSyncTests", dependencies: ["ArgonSync"], path: "Tests/ArgonSyncTests"),
+    .testTarget(name: "ArgonSyncTests", dependencies: ["ArgonSync"],
+                path: "Tests/ArgonSyncTests"),
   ]
 )
