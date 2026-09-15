@@ -3,7 +3,13 @@ name = "argon"
 version = "2.0.0"
 description = "A personal assistant that decides, rather than a state machine that phrases."
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "google-api-python-client>=2.100",
+    "google-auth-oauthlib>=1.2",
+    "flask>=3.0",
+    "discord.py>=2.3",
+    "cryptography>=42.0",
+]
 
 [build-system]
 requires = ["hatchling"]
