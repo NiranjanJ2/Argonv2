@@ -139,6 +139,16 @@ def _tail(sealed: list[Event], loose: list[Event], extra: str = "") -> dict[str,
                 "substantially the same thing again is how you get muted. "
                 "Stay quiet unless something has genuinely changed since then."
             )
+        if not replied and str(spoke.payload.get("text", "")).rstrip().endswith("?"):
+            # Silence is an answer. It asked "which meeting?" at 18:58, was not
+            # answered, and asked again at 23:14 about a meeting that had
+            # finished at 19:00. An unanswered question is closed, not pending.
+            lines.append(
+                f"Your last message was a question and he did not answer it. "
+                f"That is his answer. Do not ask it again, do not rephrase it, "
+                f"and do not raise the subject unprompted — if it still matters "
+                f"he will bring it up."
+            )
 
     looks = sum(1 for e in loose if e.kind in COUNTED)
     if looks:
@@ -202,6 +212,14 @@ def _selftest() -> None:
 
         assert first[:-1] == later[:-1], "prefix drifted — every tick would miss cache"
         assert len(first) == len(later), "tick rendering leaked into the prefix"
+
+        # An unanswered question is closed, not pending.
+        clock.set_for_test(base + timedelta(minutes=60))
+        t.append("message_out", text="which meeting do you mean?")
+        clock.set_for_test(base + timedelta(minutes=300))
+        unanswered = build(t, "SYS")[-1]["content"]
+        assert "That is his answer" in unanswered, unanswered
+        clock.set_for_test(base + timedelta(minutes=90))
 
         # A reply that is the newest row must count as a reply.
         clock.set_for_test(base + timedelta(minutes=100))
