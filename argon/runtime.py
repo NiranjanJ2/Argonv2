@@ -17,7 +17,6 @@ import os
 import threading
 import time
 from datetime import datetime, timedelta
-import time
 from pathlib import Path
 
 from argon import bell, budget, clock, config, context, schedule
@@ -38,6 +37,9 @@ CLASSROOM_SYNC_MINUTES = 30
 #: How many tasks the prompt tail carries. More than this and the tail says so
 #: rather than truncating silently.
 BOARD_LIMIT = 25
+
+#: How long the agenda is reused before the calendar is asked again.
+AGENDA_TTL_MINUTES = 10
 
 
 def system_prompt() -> str:
@@ -65,6 +67,8 @@ class Runtime:
         self.agent.deliver = self.deliver
         self._prompt_day = clock.day_key()
         self._last_classroom_sync: datetime | None = None
+        self._agenda_cache: list[str] = []
+        self._agenda_at: datetime | None = None
         self._channels: list = []
         self._stop = threading.Event()
         # One turn at a time. The Flask thread, the tick loop and the Discord
@@ -94,6 +98,8 @@ class Runtime:
         facts = self.store.facts()
         if facts:
             parts.append("What you know:\n" + "\n".join(f"- {f}" for f in facts[:25]))
+        if (agenda := self._agenda()):
+            parts.append(agenda)
         period = bell.current_period()
         if period:
             parts.append(f"He is in {period} right now.")
@@ -117,6 +123,36 @@ class Runtime:
         if today != self._prompt_day:
             self.agent.system = system_prompt()
             self._prompt_day = today
+
+    def _agenda(self) -> str:
+        """Today's remaining events, stated in the prompt.
+
+        v1's lesson, and it is the one the build guide generalises: where a
+        fact must be stated, fetch it and put it in the prompt rather than
+        hoping for a tool call — the model reliably skips optional lookups.
+        An event he booked at noon produced silence at 18:45, and the single
+        most useful thing an assistant can say is "you have X in fifteen
+        minutes".
+
+        Cached, because this runs on every turn and the calendar does not
+        change every five minutes.
+        """
+        now = clock.now()
+        if (self._agenda_at is None
+                or (now - self._agenda_at).total_seconds() > AGENDA_TTL_MINUTES * 60):
+            account = google.account_for("calendar", self.cfg.google_accounts)
+            try:
+                events = google.todays_events(account) if account else []
+            except Exception as e:  # noqa: BLE001 - a bad read must not stop the turn
+                self.transcript.append("agenda_failed", summary=repr(e)[:200])
+                events = []
+            self._agenda_cache, self._agenda_at = ([
+                f"- {e['at']:%H:%M} {e['title']}"
+                + (f"  ← in {e['minutes']} minutes" if 0 <= e["minutes"] <= 30 else "")
+                for e in events], now)
+        if not self._agenda_cache:
+            return ""
+        return "Left on his calendar today:\n" + "\n".join(self._agenda_cache)
 
     def turn(self, *, background: bool) -> object:
         """One turn with live state attached. Every entry point — tick, chat,
@@ -390,8 +426,11 @@ class Runtime:
               required=["title", "start"])
         t.add("assignments", "Outstanding Google Classroom work.",
               lambda: route("classroom", google.list_assignments), untrusted=True)
-        t.add("search_mail", "Search his mail.",
-              lambda query: route("gmail", google.search_mail, query),
+        t.add("search_mail",
+              "Search his mail. Searches every authorised account, including "
+              "school — teachers and counsellors write there.",
+              lambda query: _google_all(google.search_all_mail,
+                                        self.cfg.google_accounts, query),
               params={"query": {"type": "string"}}, required=["query"],
               untrusted=True)
 
@@ -532,6 +571,16 @@ class Runtime:
         self._stop.set()
 
 
+def _google_all(fn, accounts: list[str], *args) -> str:
+    """Like `_google`, for a call that spans every authorised account."""
+    try:
+        return fn(accounts, *args)
+    except google.GoogleUnavailable as e:
+        return str(e)
+    except Exception as e:  # noqa: BLE001
+        return f"Google call failed: {type(e).__name__}: {e}"
+
+
 def _google(fn, account: str, *args) -> str:
     """Google failures are answers, not exceptions — the model relays them."""
     try:
@@ -565,6 +614,7 @@ def _selftest() -> None:
                                        for s in rt.tools.schemas(background=True)]
 
         assert "Open tasks: none." in rt.live_state()
+        assert rt._agenda_at is not None, "the agenda is fetched, not left to a tool"
         rt.store.add_task("AP Chem pset", due="2026-09-16")
         rt.store.remember("practice Tuesdays", standing=True)
         state = rt.live_state()

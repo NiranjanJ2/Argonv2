@@ -259,9 +259,26 @@ def _when(event: dict[str, Any]) -> str:
 
 
 def format_events(events: list[dict[str, Any]]) -> str:
+    """Render events, marking the ones that have already happened.
+
+    A flat list gets relayed flat: Argon listed '14:30 Wittmann Mentoring' as
+    upcoming in a 16:03 message, 93 minutes after it ended.
+    """
     if not events:
         return "Nothing on the calendar."
-    return "\n".join(f"- {_when(e)} — {e.get('summary') or '(untitled)'}" for e in events)
+    now = clock.now()
+    lines = []
+    for e in events:
+        raw = (e.get("start") or {}).get("dateTime")
+        past = ""
+        if raw:
+            try:
+                if datetime.fromisoformat(raw).astimezone(clock.TZ) < now:
+                    past = " (already started)"
+            except ValueError:
+                pass
+        lines.append(f"- {_when(e)} — {e.get('summary') or '(untitled)'}{past}")
+    return "\n".join(lines)
 
 
 def format_assignments(items: list[dict[str, Any]], courses: dict[str, str]) -> str:
@@ -288,6 +305,30 @@ def list_events(account: str, days: int = 7, limit: int = 20) -> str:
         singleEvents=True, orderBy="startTime", maxResults=limit,
     ).execute()
     return format_events(res.get("items", []))
+
+
+def todays_events(account: str) -> list[dict[str, Any]]:
+    """Today's remaining timed events, soonest first.
+
+    Returned as records so the runtime can state them in the prompt rather
+    than hoping the model calls the tool. All-day entries are skipped: they
+    are not moments he has to be anywhere for.
+    """
+    now = clock.now()
+    end_of_day = now.replace(hour=23, minute=59, second=59)
+    res = _service(account, "calendar", "v3").events().list(
+        calendarId="primary", timeMin=now.isoformat(), timeMax=end_of_day.isoformat(),
+        singleEvents=True, orderBy="startTime", maxResults=20,
+    ).execute()
+    out = []
+    for e in res.get("items", []):
+        raw = (e.get("start") or {}).get("dateTime")
+        if not raw:
+            continue
+        starts = datetime.fromisoformat(raw).astimezone(clock.TZ)
+        out.append({"title": e.get("summary") or "(untitled)", "at": starts,
+                    "minutes": int((starts - now).total_seconds() // 60)})
+    return out
 
 
 def create_event(account: str, title: str, start: str, end: str = "") -> str:
@@ -482,6 +523,30 @@ def _due_key(work: dict[str, Any]) -> tuple:
     return (1, "") if due is None else (0, due.strftime("%Y-%m-%d"))
 
 
+def search_all_mail(accounts: list[str], query: str, limit: int = 5) -> str:
+    """Search every account that holds the Gmail scope.
+
+    `account_for` returns the first match, which is `work` — so his **school**
+    mailbox, where teachers and counsellors write, was unreachable, and
+    "did Mr Johnson email about the lab?" answered "No mail matching" from the
+    wrong inbox and read as a real answer.
+    """
+    usable = [a for a in accounts if can(a, "gmail")]
+    if not usable:
+        return "No Google account is authorised for mail."
+    blocks = []
+    for name in usable:
+        try:
+            found = search_mail(name, query, limit)
+        except GoogleUnavailable as e:
+            blocks.append(f"[{name}] {e}")
+        except Exception as e:  # noqa: BLE001
+            blocks.append(f"[{name}] failed: {type(e).__name__}")
+        else:
+            blocks.append(f"[{name}]\n{found}")
+    return "\n\n".join(blocks)
+
+
 def search_mail(account: str, query: str, limit: int = 5) -> str:
     svc = _service(account, "gmail", "v1")
     ids = svc.users().messages().list(userId="me", q=query, maxResults=limit
@@ -510,6 +575,16 @@ def _selftest() -> None:
         line = format_events([{"summary": "Lab", "start": {"dateTime": "2026-09-14T15:00:00-07:00"}}])
         assert "Lab" in line and "15:00" in line, line
         assert "(all day)" in format_events([{"summary": "Break", "start": {"date": "2026-09-14"}}])
+
+        # An event that has already started must say so, not read as upcoming.
+        clock.set_for_test(datetime(2026, 9, 14, 16, 3, tzinfo=clock.TZ))
+        past = format_events([{"summary": "Wittmann Mentoring",
+                               "start": {"dateTime": "2026-09-14T14:30:00-07:00"}}])
+        assert "already started" in past, past
+        soon = format_events([{"summary": "Project Sync",
+                               "start": {"dateTime": "2026-09-14T19:00:00-07:00"}}])
+        assert "already started" not in soon
+        clock.set_for_test(None)
         assert "(untitled)" in format_events([{"start": {"date": "2026-09-14"}}])
         assert format_events([{"summary": "x", "start": {}}]).endswith("? — x")
 
