@@ -53,11 +53,24 @@ def _turn(event: Event) -> dict[str, str]:
     return {"role": role, "content": str(event.payload.get("text", ""))}
 
 
+def _stamp(event: Event, today: str) -> str:
+    """``23:54`` for today, ``Mon 23:54`` otherwise.
+
+    The window is two days, so a bare HH:MM makes yesterday's 23:54 look later
+    than today's 16:03 — the model was handed a list labelled "oldest first"
+    that read as scrambled.
+    """
+    if event.day == today:
+        return event.at[11:16]
+    return f"{datetime.fromisoformat(event.at):%a} {event.at[11:16]}"
+
+
 def _observation(events: list[Event]) -> dict[str, str]:
     """One block describing a run of things that happened."""
     lines = []
+    today = clock.day_key()
     for e in events:
-        at = e.at[11:16]
+        at = _stamp(e, today)
         detail = e.payload.get("summary") or ", ".join(
             f"{k}={v}" for k, v in e.payload.items() if k != "summary"
         )
@@ -114,11 +127,12 @@ def _tail(sealed: list[Event], loose: list[Event], extra: str = "") -> dict[str,
     else:
         mins = int((now - datetime.fromisoformat(spoke.at)).total_seconds() // 60)
         ago = f"{mins // 60}h {mins % 60}m" if mins >= 60 else f"{mins}m"
+        today = clock.day_key()
         said = [e for e in (*sealed, *loose) if e.kind == "message_out"][-RECENT_SAID:]
-        lines.append(f"You last spoke at {spoke.at[11:16]} ({ago} ago). "
+        lines.append(f"You last spoke at {_stamp(spoke, today)} ({ago} ago). "
                      f"Your recent messages, oldest first:")
         for e in said:
-            lines.append(f"  [{e.at[11:16]}] \"{str(e.payload.get('text', ''))[:160]}\"")
+            lines.append(f"  [{_stamp(e, today)}] \"{str(e.payload.get('text', ''))[:160]}\"")
         if len(said) > 1:
             lines.append("If your next message would restate any of those, do not send it.")
         # Anything of his after that message counts, whether it landed in the
@@ -233,6 +247,16 @@ def _selftest() -> None:
         # The tail carries the facts the gates used to encode.
         tail = later[-1]["content"]
         assert "18:05" in tail and "has not replied" in tail, tail
+
+        # Yesterday must carry its day, or a 23:54 from last night reads as
+        # later than a 16:03 from this afternoon in a list labelled oldest
+        # first. Today stays bare so the common case is not noisy.
+        yesterday = Event(seq=1, at="2026-09-13T23:54:00-07:00", day="2026-09-13",
+                          kind="message_out", payload={})
+        same_day = Event(seq=2, at="2026-09-14T16:03:00-07:00", day="2026-09-14",
+                         kind="message_out", payload={})
+        assert _stamp(yesterday, "2026-09-14") == "Sun 23:54"
+        assert _stamp(same_day, "2026-09-14") == "16:03"
         assert "tonight is tight" in tail, "it must see what it actually said"
         assert "looked 12 time(s)" in tail, tail
 
