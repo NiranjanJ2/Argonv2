@@ -80,7 +80,11 @@ struct ArgonSettingsView: View {
             .font(Argon.label)
         }
       }
+      // The ambience goes behind the Form itself. Applied to the
+      // NavigationStack its GeometryReader resolved to nothing and the screen
+      // came out pure black — no blue at all.
       .scrollContentBackground(.hidden)
+      .argonAmbience(ticking: store.state.ticking)
       .navigationTitle("Settings")
       .navigationBarTitleDisplayMode(.large)
       .toolbarBackground(.hidden, for: .navigationBar)

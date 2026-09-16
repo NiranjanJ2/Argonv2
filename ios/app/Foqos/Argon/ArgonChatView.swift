@@ -16,6 +16,8 @@ struct ArgonChatView: View {
           .padding(.horizontal, 18).padding(.vertical, 14)
         }
         .scrollIndicators(.hidden)
+        // Without this the topmost bubble rides up under the status bar.
+        .safeAreaPadding(.top, 8)
         .onChange(of: store.messages.count) { _, _ in scroll(proxy) }
         .onAppear { scroll(proxy, animated: false) }
       }
