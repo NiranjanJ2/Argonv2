@@ -306,15 +306,42 @@ def create_event(account: str, title: str, start: str, end: str = "") -> str:
 
 
 def list_assignments(account: str, limit: int = 30) -> str:
+    """Published coursework across his active courses.
+
+    ``courseWorkStates=["PUBLISHED"]`` is not optional. Without it the API also
+    tries to return DRAFT work, which a *student* has no permission to see, and
+    the whole call comes back 403 "The caller does not have permission" — which
+    reads exactly like a missing scope and is not one.
+    """
     svc = _service(account, "classroom", "v1")
     courses = {c["id"]: c.get("name", "?")
                for c in svc.courses().list(courseStates=["ACTIVE"]).execute().get("courses", [])}
     items: list[dict[str, Any]] = []
-    for cid in courses:
-        work = svc.courses().courseWork().list(
-            courseId=cid, orderBy="dueDate asc", pageSize=limit).execute()
+    refused: list[str] = []
+    for cid, name in courses.items():
+        try:
+            work = svc.courses().courseWork().list(
+                courseId=cid, courseWorkStates=["PUBLISHED"],
+                orderBy="dueDate asc", pageSize=limit).execute()
+        except Exception as e:  # noqa: BLE001
+            # One course he cannot read must not hide the other five. A class
+            # silently missing from the board is the failure that matters here.
+            refused.append(f"{name} ({type(e).__name__})")
+            continue
         items.extend(work.get("courseWork", []))
-    return format_assignments(items[:limit], courses)
+
+    text = format_assignments(sorted(items, key=_due_key)[:limit], courses)
+    if refused:
+        text += "\n(could not read: " + ", ".join(refused) + ")"
+    return text
+
+
+def _due_key(work: dict[str, Any]) -> tuple:
+    """Sort by due date, undated last — the order he reads them in."""
+    due = work.get("dueDate") or {}
+    if not due.get("year"):
+        return (1, "")
+    return (0, f"{due['year']}-{due['month']:02d}-{due['day']:02d}")
 
 
 def search_mail(account: str, query: str, limit: int = 5) -> str:
@@ -354,6 +381,12 @@ def _selftest() -> None:
               "dueDate": {"year": 2026, "month": 9, "day": 16}}], {"c1": "AP Chem"})
         assert got == "- Pset (AP Chem) due 2026-09-16", got
         assert "no due date" in format_assignments([{"title": "T", "courseId": "c1"}], {"c1": "C"})
+
+        # Dated work sorts before undated, and by date.
+        rows = [{"title": "late", "dueDate": {"year": 2026, "month": 9, "day": 1}},
+                {"title": "none"},
+                {"title": "soon", "dueDate": {"year": 2026, "month": 9, "day": 20}}]
+        assert [w["title"] for w in sorted(rows, key=_due_key)] == ["late", "soon", "none"]
 
         # A missing account explains itself rather than disappearing.
         try:
