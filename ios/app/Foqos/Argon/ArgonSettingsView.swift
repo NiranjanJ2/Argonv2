@@ -48,7 +48,13 @@ struct ArgonSettingsView: View {
             case .stale(let at, let why):
               VStack(alignment: .trailing, spacing: 2) {
                 Text("cached \(at.argonAgo)").foregroundStyle(Argon.overdue)
-                Text(why).font(Argon.label).foregroundStyle(Argon.Tone.faint)
+                // Only when it adds something. This rendered "cached 13h ago"
+                // with the word "cached" underneath it.
+                if why != "cached" {
+                  Text(why).font(Argon.label)
+                    .foregroundStyle(Argon.Tone.faint)
+                    .multilineTextAlignment(.trailing)
+                }
               }
             }
           }
@@ -79,7 +85,12 @@ struct ArgonSettingsView: View {
                + "so a tap is never lost to a dropped connection.")
             .font(Argon.label)
         }
+
       }
+      // The floating tab bar sits over the last section otherwise. A trailing
+      // spacer does not help: when the content already fits there is nothing
+      // to scroll, so the footer just stays underneath the bar.
+      .contentMargins(.bottom, 72, for: .scrollContent)
       // The ambience goes behind the Form itself. Applied to the
       // NavigationStack its GeometryReader resolved to nothing and the screen
       // came out pure black — no blue at all.
@@ -89,7 +100,6 @@ struct ArgonSettingsView: View {
       .navigationBarTitleDisplayMode(.large)
       .toolbarBackground(.hidden, for: .navigationBar)
     }
-    .argonAmbience(ticking: store.state.ticking)
     .tint(Argon.accent)
   }
 
