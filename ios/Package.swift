@@ -15,6 +15,26 @@ let package = Package(
     .target(
       name: "ArgonSync",
       path: "app/Foqos/Argon",
+      // Everything in the directory that is NOT part of this target must be
+      // listed, not merely omitted. SwiftPM tolerates `sources` alone, but
+      // SourceKit then treats the remaining files as package members with no
+      // module context and reports every symbol in them as missing —
+      // "Cannot find type 'ArgonStore' in scope" on a file that compiles fine.
+      exclude: [
+        "ArgonAppDelegate.swift",
+        "ArgonBridge.swift",
+        "ArgonChatView.swift",
+        "ArgonMetered.swift",
+        "ArgonOverride.swift",
+        "ArgonPalette.swift",
+        "ArgonPush.swift",
+        "ArgonRootView.swift",
+        "ArgonRoutineActivity.swift",
+        "ArgonSettingsView.swift",
+        "ArgonStatusCard.swift",
+        "ArgonTheme.swift",
+        "ArgonTodayView.swift",
+      ],
       sources: [
         "ArgonModels.swift",
         "ArgonClient.swift",
