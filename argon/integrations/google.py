@@ -305,30 +305,63 @@ def create_event(account: str, title: str, start: str, end: str = "") -> str:
     return f"added '{title}' at {_when(ev)}"
 
 
-def list_assignments(account: str, limit: int = 30) -> str:
-    """Published coursework across his active courses.
+#: Submission states meaning he still owes the work.
+OUTSTANDING = ["CREATED", "RECLAIMED_BY_STUDENT"]
 
-    ``courseWorkStates=["PUBLISHED"]`` is not optional. Without it the API also
-    tries to return DRAFT work, which a *student* has no permission to see, and
-    the whole call comes back 403 "The caller does not have permission" — which
-    reads exactly like a missing scope and is not one.
+#: How far back a due date can be and still be worth showing. His Classroom
+#: goes back to 2022 and nobody is doing the 2022 counselling form; sorting by
+#: due date ascending and taking the first thirty returns exactly that.
+STALE_AFTER_DAYS = 21
+
+
+def list_assignments(account: str, limit: int = 30, days_back: int = STALE_AFTER_DAYS) -> str:
+    """What he still owes, across his active courses.
+
+    Two things this asks for that the obvious version does not:
+
+    ``courseWorkStates=["PUBLISHED"]`` — without it the API also tries to
+    return DRAFT work, which a *student* may not see, and the whole call comes
+    back 403 "The caller does not have permission", which reads exactly like a
+    missing scope and is not one.
+
+    ``studentSubmissions`` with ``courseWorkId="-"`` — one call per course
+    returning every submission, filtered to the states that mean "not handed
+    in". Without this the list is everything ever assigned, which is worse than
+    no list: he stops reading it.
     """
     svc = _service(account, "classroom", "v1")
     courses = {c["id"]: c.get("name", "?")
                for c in svc.courses().list(courseStates=["ACTIVE"]).execute().get("courses", [])}
+    cutoff = (clock.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
+
     items: list[dict[str, Any]] = []
     refused: list[str] = []
     for cid, name in courses.items():
         try:
+            owed = {
+                s["courseWorkId"]
+                for s in svc.courses().courseWork().studentSubmissions().list(
+                    courseId=cid, courseWorkId="-", userId="me",
+                    states=OUTSTANDING).execute().get("studentSubmissions", [])
+            }
+            if not owed:
+                continue
             work = svc.courses().courseWork().list(
                 courseId=cid, courseWorkStates=["PUBLISHED"],
-                orderBy="dueDate asc", pageSize=limit).execute()
+                orderBy="dueDate desc", pageSize=100).execute()
         except Exception as e:  # noqa: BLE001
             # One course he cannot read must not hide the other five. A class
-            # silently missing from the board is the failure that matters here.
+            # silently missing from the board is the failure that costs him.
             refused.append(f"{name} ({type(e).__name__})")
             continue
-        items.extend(work.get("courseWork", []))
+
+        for cw in work.get("courseWork", []):
+            if cw.get("id") not in owed:
+                continue
+            _, due = _due_key(cw)
+            if due and due < cutoff:
+                continue          # long overdue and clearly abandoned
+            items.append(cw)
 
     text = format_assignments(sorted(items, key=_due_key)[:limit], courses)
     if refused:
