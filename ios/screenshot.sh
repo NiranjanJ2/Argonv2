@@ -38,8 +38,15 @@ if [ -n "$TOKEN" ]; then
   xcrun simctl spawn "$udid" defaults write com.niranjanj.argon argon.token -string "$TOKEN"
 fi
 
-xcrun simctl launch "$udid" com.niranjanj.argon >/dev/null
-sleep 6
-xcrun simctl io "$udid" screenshot "$OUT/1-today.png" >/dev/null 2>&1
-echo "shot: $OUT/1-today.png"
-echo "device $udid booted; app running"
+# Every screen, not just the first. There is no Simulator.app in this toolchain
+# to tap a tab with, so the app reads its opening tab from a default and we
+# relaunch once per screen.
+for screen in today chat focus settings; do
+  xcrun simctl terminate "$udid" com.niranjanj.argon >/dev/null 2>&1 || true
+  xcrun simctl spawn "$udid" defaults write com.niranjanj.argon argon.tab -string "$screen"
+  xcrun simctl launch "$udid" com.niranjanj.argon >/dev/null
+  sleep 6
+  xcrun simctl io "$udid" screenshot "$OUT/$screen.png" >/dev/null 2>&1
+  echo "shot: $OUT/$screen.png"
+done
+echo "device $udid booted"

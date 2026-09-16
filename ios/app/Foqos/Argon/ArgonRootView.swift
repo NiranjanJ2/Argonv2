@@ -5,9 +5,24 @@ import SwiftUI
 struct ArgonRootView: View {
   let store: ArgonStore
   @Environment(\.scenePhase) private var phase
-  @State private var tab = Tab.today
+  // Seeded from a default so screenshot.sh can shoot any screen. There is no
+  // Simulator.app in this toolchain — only the headless runtime — so there is
+  // no way to tap a tab; without this seam every screen after the first needs
+  // a code edit and a rebuild to look at.
+  @State private var tab = Tab(rawKey: UserDefaults.standard.string(forKey: "argon.tab"))
 
-  enum Tab: Hashable { case today, chat, focus, settings }
+  enum Tab: Hashable {
+    case today, chat, focus, settings
+
+    init(rawKey: String?) {
+      switch rawKey {
+      case "chat": self = .chat
+      case "focus": self = .focus
+      case "settings": self = .settings
+      default: self = .today
+      }
+    }
+  }
 
   var body: some View {
     TabView(selection: $tab) {

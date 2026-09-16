@@ -122,12 +122,18 @@ struct ArgonBubble: View {
           .padding(.horizontal, 15).padding(.vertical, 11)
           .background {
             if message.isFromArgon {
+              // 10% accent over regularMaterial reads as plain grey on a dark
+              // ground — the material's own opacity swallows it. A thinner
+              // material and a real gradient let the blue actually arrive,
+              // while staying clearly lighter than his own solid-blue bubble.
               RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(.regularMaterial)
+                .fill(.ultraThinMaterial)
                 .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous)
-                  .fill(Argon.accent.opacity(0.10)))
+                  .fill(LinearGradient(
+                    colors: [Argon.accent.opacity(0.26), Argon.accentDeep.opacity(0.20)],
+                    startPoint: .topLeading, endPoint: .bottomTrailing)))
                 .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous)
-                  .strokeBorder(Argon.hairline, lineWidth: 1))
+                  .strokeBorder(Argon.hairlineBright, lineWidth: 1))
             } else {
               RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .fill(LinearGradient(colors: [Argon.accent, Argon.accentDeep],

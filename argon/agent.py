@@ -22,6 +22,7 @@ phone buzzed".
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 from argon import budget, context, provider
@@ -136,7 +137,7 @@ class Agent:
         the failure, and hunted for phrasing that would work. The model must be
         told plainly that the channel is broken and that retrying is pointless.
         """
-        text = (text or "").strip()
+        text = strip_ids((text or "").strip())
         if not text:
             return "Error: empty message not sent"
 
@@ -159,6 +160,40 @@ class Agent:
         """He said something.  Record it, then answer."""
         self.t.append("message_in", text=text, source=source)
         return self.turn(background=False, extra=extra)
+
+
+
+#: An argon: link, or a bare task id (uuid4().hex[:12]). The link alternative
+#: comes first so the id *inside* argon:task/<id> matches as part of the link
+#: and is handed back untouched — a lookbehind cannot do this, because what
+#: precedes the id there is "task/", not "argon:".
+_BARE_ID = re.compile(r"argon:\S+|\b[0-9a-f]{12}\b")
+
+#: "— task id ee4723185a15", "(task id ee4723185a15)", "task id: ee4723185a15".
+_LABELLED_ID = re.compile(
+    r"\s*[\(\[]?\s*[—–-]?\s*task\s+id[:\s]+[0-9a-f]{12}\s*[\)\]]?", re.I)
+
+
+def strip_ids(text: str) -> str:
+    """Remove task ids from anything he is about to read.
+
+    The system prompt has said "never print a task id as text" from the start
+    and the model prints them anyway — "HW 18 — task id ee4723185a15" went out
+    to his phone. This is the same lesson as the delivery guard: a rule in the
+    prompt is a suggestion the model weighs against everything else in context,
+    a rule in code is a rule. An id is plumbing; it means nothing to him and it
+    makes the message read like a database dump.
+
+    Ids inside an ``argon:`` link are left alone — there they are the payload
+    the app taps on, not text he reads.
+    """
+    text = _LABELLED_ID.sub("", text)
+    text = _BARE_ID.sub(lambda m: m[0] if m[0].startswith("argon:") else "", text)
+    # The removal leaves the dangling punctuation that introduced it.
+    text = re.sub(r"\s+([,.;:!?])", r"\1", text)
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    text = re.sub(r"\s+[—–-]\s*([.\n]|$)", r"\1", text)
+    return text.strip()
 
 
 def _selftest() -> None:
@@ -255,6 +290,14 @@ def _selftest() -> None:
 
         clock.set_for_test(None)
         del os.environ["ARGON_HOME"]
+    # Ids are stripped in code because the prompt rule did not hold.
+    assert strip_ids("HW 18 — task id ee4723185a15. Nothing else.") \
+        == "HW 18. Nothing else."
+    assert strip_ids("Started it (task id 445d89ec04eb).") == "Started it."
+    assert strip_ids("Open argon:task/445d89ec04eb now.") \
+        == "Open argon:task/445d89ec04eb now.", "the link payload must survive"
+    assert strip_ids("Nothing due today.") == "Nothing due today."
+
     print("agent selftest ok")
 
 
