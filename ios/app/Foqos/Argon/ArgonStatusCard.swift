@@ -35,12 +35,12 @@ struct ArgonStatusCard: View {
         marker
         VStack(alignment: .leading, spacing: 2) {
           Text(headline)
-            .font(Argon.heading)
+            .font(Argon.cardTitle)
             .foregroundStyle(Argon.Tone.primary)
             .lineLimit(1)
           Text(detail)
-            .font(Argon.label)
-            .foregroundStyle(Argon.Tone.faint)
+            .font(Argon.detail)
+            .foregroundStyle(Argon.Tone.secondary)
             .lineLimit(1)
         }
         Spacer(minLength: 6)
@@ -56,14 +56,19 @@ struct ArgonStatusCard: View {
       ArgonPulse()
     } else {
       Circle()
-        .fill(store.state.ticking ? Argon.accent.opacity(0.7) : Argon.Tone.faint.opacity(0.5))
-        .frame(width: 7, height: 7)
+        .fill(store.state.ticking ? Argon.accent : Argon.Tone.faint.opacity(0.6))
+        .frame(width: 9, height: 9)
+        .shadow(color: store.state.ticking ? Argon.accent.opacity(0.9) : .clear, radius: 7)
     }
   }
 
   private var tint: Color {
     if store.state.started != nil { return Argon.running }
-    return store.state.overdueCount > 0 ? Argon.overdue : .clear
+    if store.state.overdueCount > 0 { return Argon.overdue }
+    // Blue, never `.clear`: the glass takes its wash and its glow from this,
+    // so a clear tint renders the card as plain grey — which is exactly what
+    // it looked like on his phone.
+    return Argon.accent
   }
 
   private var headline: String {
