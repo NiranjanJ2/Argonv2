@@ -35,6 +35,10 @@ PROMPT = Path(__file__).parent / "prompts" / "argon.md"
 #: and homework does not change every five minutes.
 CLASSROOM_SYNC_MINUTES = 30
 
+#: How many tasks the prompt tail carries. More than this and the tail says so
+#: rather than truncating silently.
+BOARD_LIMIT = 25
+
 
 def system_prompt() -> str:
     """Static for the whole day, so it caches.
@@ -75,8 +79,16 @@ class Runtime:
         parts = []
         tasks = self.store.tasks()
         if tasks:
-            parts.append("Open tasks:\n" + "\n".join(
-                f"- [{t.id}] {t.line()}" for t in tasks[:25]))
+            shown = tasks[:BOARD_LIMIT]
+            board = "\n".join(f"- [{t.id}] {t.line()}" for t in shown)
+            if len(tasks) > len(shown):
+                # Silent truncation against a prompt that demands "give him
+                # all of it" guarantees a quietly incomplete answer, and he
+                # cannot tell. At 59 open the model saw 25 and had no idea.
+                board += (f"\n… and {len(tasks) - len(shown)} more not shown. "
+                          f"Call list_tasks for the full board before telling "
+                          f"him what is due.")
+            parts.append(f"Open tasks ({len(tasks)}):\n{board}")
         else:
             parts.append("Open tasks: none.")
         facts = self.store.facts()
@@ -354,11 +366,16 @@ class Runtime:
         def route(capability: str, fn, *args) -> str:
             account = google.account_for(capability, self.cfg.google_accounts)
             if account is None:
-                return (f"No Google account is authorised for {capability} — none "
-                        f"holds the {google.missing_scope(capability)} scope. "
-                        f"Tell Niranjan to run `argon google-auth <account>` on the "
-                        f"server; nothing you can do will fix it, so say it once "
-                        f"and do not raise it again tonight.")
+                # Steering text is kept out of the reportable sentence. Argon
+                # pasted "(say it once; nothing you can do will fix it
+                # tonight)" — instructions addressed to itself — into a message
+                # to him, and garbled "tell Niranjan to run X on the server"
+                # into "tell the server".
+                return (f"REPORT TO HIM: Classroom is unavailable — no Google "
+                        f"account is authorised for {capability}.\n"
+                        f"NOT FOR HIM: the fix is `argon google-auth <account>` "
+                        f"run on the server by Niranjan. You cannot do it. Say it "
+                        f"once and do not raise it again tonight.")
             return _google(fn, account, *args)
 
         t.add("calendar", "His calendar for the next few days.",
@@ -387,6 +404,22 @@ class Runtime:
                     f"before then. Say it once now; do not repeat it.")
 
         def resume() -> str:
+            """Come back on watch. Only he can lift a stand-down.
+
+            The model stood itself down and un-stood itself twenty minutes
+            later with no message from him in between, then sent the two worst
+            messages in the log. A commitment the committer can silently
+            cancel is not a commitment.
+            """
+            quiet = store.quiet()
+            if quiet is None:
+                return "not stood down"
+            spoke_at = self.transcript.last("stood_down")
+            since = self.transcript.since(spoke_at.seq) if spoke_at else []
+            if not any(e.kind == "message_in" for e in since):
+                return ("Refused: he has not said anything since you stood down. "
+                        "Only he lifts it. It expires on its own at "
+                        f"{quiet[0]:%a %H:%M}.")
             store.clear_quiet()
             return "back on watch"
 
@@ -566,8 +599,15 @@ def _selftest() -> None:
             "stand_down", {"hours": 3, "reason": "he asked"}, background=True)
         assert rt.tick_once() is None, "no ticking while stood down"
         assert "STANDING DOWN" in rt.live_state()
+
+        # Only he lifts a stand-down; the model cannot cancel its own. Checked
+        # before he says anything, which is the case that matters.
+        assert rt.tools.call("resume", {}, background=True).startswith("Refused")
+        assert rt.store.quiet() is not None, "the commitment must hold"
+
         scripted.insert(0, provider.Reply(text="still here"))
         assert rt.receive("you up?").spoke is True, "he can always reach it"
+        # Now that he has spoken, it may come back on watch.
         assert rt.tools.call("resume", {}, background=True) == "back on watch"
         assert rt.store.quiet() is None
         assert rt.tools.call("stand_down", {"hours": 999}, background=True).startswith("Error")
@@ -603,8 +643,11 @@ def _selftest() -> None:
         # A dead Google account answers instead of vanishing, and an
         # unauthorised capability says which command fixes it.
         assert "not connected" in _google(google.list_events, "nobody", 7)
-        assert "No Google account is authorised for calendar" in \
-            rt.tools.call("calendar", {}, background=True)
+        # The reportable half is separated from the steering half, so the
+        # model cannot paste its own instructions into a message to him.
+        unavailable = rt.tools.call("calendar", {}, background=True)
+        assert "REPORT TO HIM:" in unavailable and "NOT FOR HIM:" in unavailable
+        assert "no Google account is authorised for calendar" in unavailable
         assert "no Google account is authorised" in rt.sync_classroom()
 
         # A channel that throws does not break delivery to the others.

@@ -76,11 +76,21 @@ class Task:
         return self.started_at is not None
 
     def line(self) -> str:
+        """One line for the prompt and the board.
+
+        The weekday and the overdue count are computed here rather than left
+        to the model. v1 learned this the hard way: asked what was on his week
+        it answered '08/12 Mon', '08/14 Sat', '08/16 Mon' — the dates right and
+        three of four weekdays invented. A confidently wrong weekday is worse
+        than none, because he plans around it. Same for lateness: stated beats
+        derived, and 'due 2026-08-25' made the model do sixty date
+        subtractions to find the overdue set.
+        """
         bits = [self.title]
         if self.subject:
             bits.append(f"({self.subject})")
         if self.due:
-            bits.append(f"due {self.due}")
+            bits.append(f"due {_due_phrase(self.due)}")
         if self.priority != "normal":
             bits.append(f"[{self.priority}]")
         return " ".join(bits)
@@ -252,13 +262,23 @@ class Store:
                        summary=", ".join(f"{k}={v}" for k, v in allowed.items()))
         return self.task(tid)
 
-    def find_task(self, needle: str) -> Task | None:
-        """Loose match on title, for when he names a task instead of an id."""
+    def find_tasks(self, needle: str) -> list[Task]:
+        """Every open task matching *needle*; an exact id match wins alone."""
         needle = needle.strip().lower()
-        for t in self.tasks():
-            if needle == t.id or needle in t.title.lower():
-                return t
-        return None
+        exact = [t for t in self.tasks() if needle == t.id]
+        if exact:
+            return exact
+        return [t for t in self.tasks() if needle in t.title.lower()]
+
+    def find_task(self, needle: str) -> Task | None:
+        """The single match, or None when there is none *or several*.
+
+        Returning the first of several is the guess that silently completed
+        the wrong 'Math homework' in v1. Callers that can report ambiguity
+        should use `find_tasks`.
+        """
+        found = self.find_tasks(needle)
+        return found[0] if len(found) == 1 else None
 
     # -- facts ------------------------------------------------------------
     def remember(self, text: str, *, standing: bool = False, until: str = "") -> str:
@@ -322,6 +342,24 @@ class Store:
         self._t.append("stand_down_cleared")
 
 
+def _due_phrase(due: str) -> str:
+    """``Wed 09-16 (today)`` / ``Tue 08-25 (21 days overdue)``."""
+    try:
+        day = datetime.strptime(due[:10], "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return due
+    delta = (day - clock.today()).days
+    if delta == 0:
+        when = "today"
+    elif delta == 1:
+        when = "tomorrow"
+    elif delta < 0:
+        when = f"{-delta} day{'s' if delta < -1 else ''} overdue"
+    else:
+        when = f"in {delta} days"
+    return f"{day:%a} {day:%m-%d} ({when})"
+
+
 def _task(row: sqlite3.Row) -> Task:
     return Task(id=row["id"], title=row["title"], subject=row["subject"],
                 due=row["due"], priority=row["priority"], done=bool(row["done"]),
@@ -348,8 +386,24 @@ def _selftest() -> None:
         assert s.tasks()[-1].title == "No due date"
 
         assert s.find_task("chem").id == a.id
+        assert len(s.find_tasks("chem")) == 1
         assert s.find_task(b.id).title == "Read Ch 3"
         assert s.find_task("nonsense") is None
+
+        # Two matches must refuse rather than guess.
+        s.add_task("Math homework one")
+        s.add_task("Math homework two")
+        assert len(s.find_tasks("math homework")) == 2
+        assert s.find_task("math homework") is None, "ambiguity must not resolve"
+
+        # Dates carry their weekday and their lateness.
+        clock.set_for_test(datetime(2026, 9, 16, 9, 0, tzinfo=clock.TZ))
+        assert "(today)" in _due_phrase("2026-09-16")
+        assert "(tomorrow)" in _due_phrase("2026-09-17")
+        assert "21 days overdue" in _due_phrase("2026-08-26")
+        assert _due_phrase("2026-09-16").startswith("Wed ")
+        assert _due_phrase("nonsense") == "nonsense"
+        clock.set_for_test(datetime(2026, 9, 14, 18, 0, tzinfo=clock.TZ))
 
         # Importing the same external item twice updates rather than duplicates.
         first = s.add_task("HW 17", source="classroom", external_id="cw-17",
