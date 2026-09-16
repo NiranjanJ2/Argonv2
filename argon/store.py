@@ -44,8 +44,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     external_id TEXT,
     created_at TEXT NOT NULL
 );
-CREATE UNIQUE INDEX IF NOT EXISTS tasks_external ON tasks (external_id)
-  WHERE external_id IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -100,9 +99,27 @@ class Store:
         # recovery if the process is killed.
         self._db.execute("PRAGMA wal_autocheckpoint=64")
         self._db.executescript(SCHEMA)
+        self._migrate()
         self._db.commit()
         _secure(path)
         self._t = transcript
+
+    #: Columns added after the first release. `CREATE TABLE IF NOT EXISTS`
+    #: leaves an existing table alone, so a new column has to be added by hand
+    #: — and an index over it must wait until it exists, or the whole schema
+    #: script fails and the service will not start.
+    MIGRATIONS = (
+        ("tasks", "external_id", "TEXT"),
+    )
+
+    def _migrate(self) -> None:
+        for table, column, kind in self.MIGRATIONS:
+            existing = {r[1] for r in self._db.execute(f"PRAGMA table_info({table})")}
+            if column not in existing:
+                self._db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
+        self._db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS tasks_external ON tasks (external_id)"
+            " WHERE external_id IS NOT NULL")
 
     # -- tasks ------------------------------------------------------------
     def add_task(self, title: str, *, subject: str = "", due: str = "",
@@ -372,6 +389,21 @@ def _selftest() -> None:
         assert s.quiet() is None
 
         clock.set_for_test(None)
+        # An older database must survive the upgrade rather than refuse to open.
+        legacy = Path(tmp) / "legacy.db"
+        import sqlite3 as _sq
+        old = _sq.connect(legacy)
+        old.execute("CREATE TABLE tasks (id TEXT PRIMARY KEY, title TEXT NOT NULL,"
+                    " subject TEXT, due TEXT, priority TEXT NOT NULL DEFAULT 'normal',"
+                    " done INTEGER NOT NULL DEFAULT 0, done_at TEXT, started_at TEXT,"
+                    " source TEXT NOT NULL DEFAULT 'him', created_at TEXT NOT NULL)")
+        old.execute("INSERT INTO tasks (id,title,created_at) VALUES ('old','Older task','x')")
+        old.commit(); old.close()
+
+        migrated = Store(legacy, t)
+        assert [x.title for x in migrated.tasks()] == ["Older task"]
+        assert migrated.add_task("New", source="classroom", external_id="cw-1").external_id == "cw-1"
+
     print("store selftest ok")
 
 
