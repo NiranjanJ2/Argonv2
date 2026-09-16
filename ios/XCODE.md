@@ -17,7 +17,13 @@ Distribution. An App Store Connect API key at
 `~/.appstoreconnect/private_keys/AuthKey_<KeyID>.p8` then makes the upload
 scriptable.
 
-The icon is done — `argon-icon.appiconset`, 1024×1024, no alpha.
+The icon is done. **It is not an `.appiconset`** — the project uses Xcode 26's
+Icon Composer format, `Foqos/argon-icon.icon`, which lives *outside*
+`Assets.xcassets` and is what `ASSETCATALOG_COMPILER_APPICON_NAME` points at. I
+missed it at first, created a duplicate `argon-icon.appiconset`, and got two
+assets compiling to the same name. To change the icon, replace the layer image
+in `argon-icon.icon/Assets/` and update `image-name` in its `icon.json`. The
+previous flask design is recoverable at `git show 9ec43a2:ios/app/Foqos/argon-icon.icon/Assets/argon-flask.png`.
 
 **2. Signing, to run it on your phone.** The project signs
 `com.niranjanj.argon` / team `DX3U2FC8X5`; builds here were `CODE_SIGNING_ALLOWED=NO`,

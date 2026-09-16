@@ -9,8 +9,8 @@
       "layers": [
         {
           "glass": false,
-          "image-name": "argon-flask.png",
-          "name": "argon-flask",
+          "image-name": "argon-orb.png",
+          "name": "argon-orb",
           "position": {
             "scale": 1.0,
             "translation-in-points": [
