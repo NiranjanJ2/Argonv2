@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from argon import clock
-from argon.transcript import Transcript
+from argon.transcript import Transcript, _secure
 
 #: `until` comes from the model as free text. "tomorrow" sorts above every real
 #: date, so a fact set to expire never did. Anything not an ISO date is dropped
@@ -85,13 +85,19 @@ class Task:
 
 class Store:
     def __init__(self, path: Path, transcript: Transcript) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
+        path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
         self._lock = threading.Lock()
         self._db = sqlite3.connect(path, check_same_thread=False)
         self._db.row_factory = sqlite3.Row
         self._db.execute("PRAGMA journal_mode=WAL")
+        # Checkpoint often. The default only folds the WAL back at 1000 pages,
+        # so a long-running gateway sat on a 2 MB WAL in front of a 16 KB
+        # database — more of his life at rest than necessary, and a slower
+        # recovery if the process is killed.
+        self._db.execute("PRAGMA wal_autocheckpoint=64")
         self._db.executescript(SCHEMA)
         self._db.commit()
+        _secure(path)
         self._t = transcript
 
     # -- tasks ------------------------------------------------------------

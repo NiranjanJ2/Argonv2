@@ -72,14 +72,20 @@ class Transcript:
 
     def __init__(self, path: Path) -> None:
         self.path = path
-        path.parent.mkdir(parents=True, exist_ok=True)
+        path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
         self._lock = threading.Lock()
         self._db = sqlite3.connect(path, check_same_thread=False)
         self._db.row_factory = sqlite3.Row
         # WAL so the HTTP thread can append while the agent loop reads.
         self._db.execute("PRAGMA journal_mode=WAL")
+        # Checkpoint often. The default only folds the WAL back at 1000 pages,
+        # so a long-running gateway sat on a 2 MB WAL in front of a 16 KB
+        # database — more of his life at rest than necessary, and a slower
+        # recovery if the process is killed.
+        self._db.execute("PRAGMA wal_autocheckpoint=64")
         self._db.executescript(SCHEMA)
         self._db.commit()
+        _secure(path)
 
     def append(self, kind: str, **payload: Any) -> int:
         """Record one thing that happened.  Returns its sequence number."""
@@ -121,6 +127,17 @@ class Transcript:
                 "SELECT * FROM events WHERE kind = ? ORDER BY seq DESC LIMIT 1", (kind,)
             ).fetchone()
         return _row(row) if row else None
+
+
+def _secure(db: Path) -> None:
+    """0600 on the database and its WAL siblings, as soon as they exist."""
+    for suffix in ("", "-wal", "-shm"):
+        target = db.with_name(db.name + suffix)
+        try:
+            if target.exists():
+                target.chmod(0o600)
+        except OSError:
+            pass
 
 
 def _row(r: sqlite3.Row) -> Event:

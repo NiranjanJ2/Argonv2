@@ -63,8 +63,12 @@ def harden() -> list[str]:
             fixed.append(str(root))
     except OSError:
         pass
+    # The databases hold every message, his schedule and his homework — more
+    # sensitive than the config, and they were 0644 because this list only
+    # named credentials. The -wal and -shm siblings carry the same content.
     for pattern in ("config.json", "spend.json", "device_token",
-                    "apns/*.p8", "google/*.json"):
+                    "apns/*.p8", "google/*.json",
+                    "*.db", "*.db-wal", "*.db-shm"):
         for target in root.glob(pattern):
             try:
                 if target.is_file() and target.stat().st_mode & 0o077:
@@ -193,6 +197,13 @@ def _selftest() -> None:
         leaky.chmod(0o644)
         assert str(leaky) in harden()
         assert leaky.stat().st_mode & 0o077 == 0, "config.json must be 0600"
+
+        # The transcript is his whole life; it must be covered too.
+        db = path("transcript.db")
+        db.write_text("")
+        db.chmod(0o644)
+        assert str(db) in harden(), "databases must be hardened"
+        assert db.stat().st_mode & 0o077 == 0
         assert harden() == [], "nothing left to fix on a second pass"
         del os.environ["ARGON_HOME"]
     print("config selftest ok")
