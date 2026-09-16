@@ -1,127 +1,135 @@
 import SwiftUI
 
-/// The look: slate, blue-grey, glass.
+/// The look: blue-slate, glass, dark.
 ///
-/// Everything visual lives here so a colour is never invented at a call site.
-/// Argon is a dark-first app — he uses it in the evening, in his room, usually
-/// after nine — so the palette is built for that and light mode is a courtesy,
-/// not the baseline.
+/// Three rules this file exists to enforce, each written after getting it
+/// wrong:
+///
+/// **Type is Dynamic Type.** Never `Font.system(size:)`. Fixed sizes ignore the
+/// text size he has chosen in Settings, and the first version of this screen
+/// used 15pt body where iOS uses 17 — small for everyone and unreadable for
+/// anyone who had turned text up.
+///
+/// **Blue is the subject, not an accent.** A slate palette with one desaturated
+/// blue used only on small pills reads as grey, and then the single warm colour
+/// — meant for overdue work — becomes the loudest thing on screen.
+///
+/// **Decoration must not affect layout.** The ambient field is applied with
+/// `.argonAmbience()`, which puts it in a `background`. As a ZStack sibling its
+/// 575pt blooms sized the whole stack and pushed the content off a 390pt phone.
 enum Argon {
 
-  // MARK: palette
+  // MARK: ground
 
-  /// Blue-grey slate, cool end. Not black: a true black background makes glass
-  /// look like a sticker, because there is nothing behind it to refract.
+  /// Navy-slate rather than near-black. True black leaves nothing for glass to
+  /// refract and drains the blue out of everything above it.
   enum Ink {
-    static let void = Color(red: 0.035, green: 0.047, blue: 0.067)   // #090C11
-    static let deep = Color(red: 0.055, green: 0.071, blue: 0.098)   // #0E1219
-    static let slate = Color(red: 0.086, green: 0.106, blue: 0.145)  // #161B25
-    static let raised = Color(red: 0.125, green: 0.149, blue: 0.196) // #202632
+    static let base = Color(red: 0.035, green: 0.055, blue: 0.094)   // #090E18
+    static let deep = Color(red: 0.055, green: 0.082, blue: 0.137)   // #0E1523
+    static let slate = Color(red: 0.094, green: 0.129, blue: 0.196)  // #182132
+    static let raised = Color(red: 0.137, green: 0.180, blue: 0.263) // #232E43
   }
 
-  /// Not named `Text`: a nested type with that name shadows SwiftUI's `Text`
-  /// wherever the palette is referenced, and in a ViewBuilder full of
-  /// overloaded `Text` initialisers that is enough to push whole view bodies
-  /// past "unable to type-check this expression in reasonable time".
   enum Tone {
-    static let primary = Color(red: 0.902, green: 0.925, blue: 0.957)
-    static let secondary = Color(red: 0.553, green: 0.596, blue: 0.667)
-    static let faint = Color(red: 0.373, green: 0.412, blue: 0.478)
+    static let primary = Color(red: 0.937, green: 0.957, blue: 0.984)
+    static let secondary = Color(red: 0.639, green: 0.702, blue: 0.788)
+    static let faint = Color(red: 0.443, green: 0.502, blue: 0.588)
   }
 
-  /// Steel blue — the one colour that is Argon's. Used sparingly: on a slate
-  /// field, a single accent reads as meaning, and three read as decoration.
-  static let accent = Color(red: 0.431, green: 0.659, blue: 0.847)     // #6EA8D8
-  static let accentDim = Color(red: 0.278, green: 0.435, blue: 0.573)
+  /// Vivid enough to read as blue on a dark ground. The previous #6EA8D8 was
+  /// close enough to grey that the screen had no colour in it at all.
+  static let accent = Color(red: 0.302, green: 0.639, blue: 1.0)      // #4DA3FF
+  static let accentSoft = Color(red: 0.514, green: 0.761, blue: 1.0)  // #83C2FF
+  static let accentDeep = Color(red: 0.149, green: 0.404, blue: 0.769) // #2667C4
 
-  /// Warm, for the only thing that should ever feel urgent.
-  static let overdue = Color(red: 0.878, green: 0.463, blue: 0.408)    // #E07668
-  static let running = Color(red: 0.459, green: 0.788, blue: 0.616)    // #75C99D
+  /// Green means running. Red means late. Nothing else is coloured, so that
+  /// when something is, it means something.
+  static let running = Color(red: 0.325, green: 0.847, blue: 0.588)
+  static let overdue = Color(red: 0.984, green: 0.353, blue: 0.376)
 
-  static let hairline = Color.white.opacity(0.08)
-  static let hairlineBright = Color.white.opacity(0.14)
+  static let hairline = Color.white.opacity(0.10)
+  static let hairlineBright = Color.white.opacity(0.22)
 
-  // MARK: type
+  // MARK: type — all Dynamic Type
 
-  static let title = Font.system(size: 28, weight: .semibold, design: .rounded)
-  static let heading = Font.system(size: 15, weight: .semibold)
-  static let body = Font.system(size: 15, weight: .regular)
-  static let label = Font.system(size: 12, weight: .medium)
-  static let mono = Font.system(size: 12, weight: .medium, design: .monospaced)
+  static let screenTitle = Font.largeTitle.weight(.bold)
+  static let cardTitle = Font.title3.weight(.semibold)
+  static let heading = Font.headline
+  static let body = Font.body
+  static let detail = Font.subheadline
+  static let label = Font.footnote.weight(.medium)
+  static let mono = Font.system(.footnote, design: .monospaced).weight(.medium)
 }
 
 // MARK: - the ambient field
 
 /// The background knows what time it is.
 ///
-/// Argon watches from four in the afternoon until midnight on school nights,
-/// and is off duty otherwise. Rather than print that somewhere, the room
-/// behind the glass says it: the field warms and lifts while he is being
-/// watched over, and goes cold and still when Argon is off. It is the one
-/// piece of state he never has to read.
-struct ArgonAmbience: View {
-  /// 0 at four o'clock, 1 at midnight. Drives how deep the field sits.
+/// Argon watches from four until midnight on school nights and is off duty
+/// otherwise. Rather than print that, the room behind the glass says it: warm
+/// and lit while he is being watched over, cold and still when Argon is
+/// resting.
+private struct ArgonAmbience: View {
   var evening: Double
-  /// Off duty — weekends, and the small hours.
   var resting: Bool
 
   var body: some View {
-    ZStack {
-      Argon.Ink.void
+    GeometryReader { geo in
+      let w = geo.size.width, h = geo.size.height
+      ZStack {
+        LinearGradient(colors: [Argon.Ink.deep, Argon.Ink.base],
+                       startPoint: .top, endPoint: .bottom)
 
-      // Two slow blooms, offset. Their warmth tracks the evening; when Argon
-      // is resting they desaturate toward the slate and sink.
-      bloom(colour: topColour, size: 1.25)
-        .offset(x: -110, y: -220 + CGFloat(evening * 60))
-        .blur(radius: 90)
+        bloom(top).frame(width: w * 1.5, height: w * 1.5)
+          .position(x: w * 0.18, y: h * (0.10 + 0.05 * evening))
+          .blur(radius: 60)
 
-      bloom(colour: bottomColour, size: 0.95)
-        .offset(x: 130, y: 260 - CGFloat(evening * 40))
-        .blur(radius: 110)
-
-      // A vignette keeps the glass edges legible over the blooms.
-      RadialGradient(colors: [.clear, Argon.Ink.void.opacity(0.75)],
-                     center: .center, startRadius: 160, endRadius: 520)
+        bloom(bottom).frame(width: w * 1.3, height: w * 1.3)
+          .position(x: w * 0.88, y: h * (0.78 - 0.06 * evening))
+          .blur(radius: 70)
+      }
+      // Sized to the view it decorates and clipped to it, so it can never
+      // push the content sideways.
+      .frame(width: w, height: h)
+      .clipped()
     }
     .ignoresSafeArea()
+    .allowsHitTesting(false)
     .animation(.easeInOut(duration: 1.2), value: resting)
   }
 
-  private func bloom(colour: Color, size: Double) -> some View {
-    Circle()
-      .fill(RadialGradient(colors: [colour, colour.opacity(0)],
-                           center: .center, startRadius: 0, endRadius: 260))
-      .frame(width: 460 * size, height: 460 * size)
+  private func bloom(_ colour: Color) -> some View {
+    Circle().fill(RadialGradient(colors: [colour, colour.opacity(0)],
+                                 center: .center, startRadius: 0, endRadius: 320))
   }
 
-  private var topColour: Color {
-    resting
-      ? Argon.Ink.slate.opacity(0.55)
-      : Argon.accentDim.opacity(0.30 + 0.10 * (1 - evening))
+  private var top: Color {
+    resting ? Argon.Ink.slate.opacity(0.7)
+            : Argon.accentDeep.opacity(0.55 - 0.10 * evening)
   }
 
-  private var bottomColour: Color {
-    resting
-      ? Argon.Ink.deep.opacity(0.6)
-      : Color(red: 0.22, green: 0.27, blue: 0.44).opacity(0.40 + 0.12 * evening)
+  private var bottom: Color {
+    resting ? Argon.Ink.deep.opacity(0.8)
+            : Color(red: 0.180, green: 0.267, blue: 0.561).opacity(0.50 + 0.10 * evening)
   }
+}
 
-  /// Where we are between 16:00 and midnight, and whether Argon is on duty.
-  /// Mirrors the server's own window so the two never disagree on screen.
-  static func now(ticking: Bool, date: Date = Date()) -> ArgonAmbience {
+extension View {
+  /// Put the ambient field behind this view. A `background` never changes the
+  /// size of what it sits behind — which is the whole point.
+  func argonAmbience(ticking: Bool, date: Date = Date()) -> some View {
     let hour = Calendar.current.component(.hour, from: date)
-    let progress = min(max(Double(hour - 16) / 8.0, 0), 1)
-    return ArgonAmbience(evening: progress, resting: !ticking)
+    let evening = min(max(Double(hour - 16) / 8.0, 0), 1)
+    return background(ArgonAmbience(evening: evening, resting: !ticking))
   }
 }
 
 // MARK: - glass
 
-/// A pane of glass. One shape, one border, one shadow — used everywhere, so
-/// the app reads as one surface rather than a pile of cards.
+/// A pane of glass. One radius, one border, one shadow, everywhere.
 struct ArgonGlass<Content: View>: View {
-  var tint: Color = .clear
-  var padding: CGFloat = 16
+  var tint: Color = Argon.accent
+  var padding: CGFloat = 18
   @ViewBuilder var content: Content
 
   var body: some View {
@@ -129,46 +137,82 @@ struct ArgonGlass<Content: View>: View {
       .padding(padding)
       .frame(maxWidth: .infinity, alignment: .leading)
       .background {
-        RoundedRectangle(cornerRadius: 18, style: .continuous)
-          .fill(.ultraThinMaterial)
+        RoundedRectangle(cornerRadius: 22, style: .continuous)
+          .fill(.regularMaterial)
           .overlay {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-              .fill(tint.opacity(0.10))
+            // A blue wash, so glass over a navy ground still reads as blue
+            // rather than as grey plastic.
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+              .fill(LinearGradient(
+                colors: [tint.opacity(0.22), tint.opacity(0.06)],
+                startPoint: .topLeading, endPoint: .bottomTrailing))
           }
           .overlay {
-            // A brighter top edge is what makes it read as glass rather than
-            // as a grey rectangle: it is the light catching the lip.
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-              .strokeBorder(
-                LinearGradient(colors: [Argon.hairlineBright, Argon.hairline],
-                               startPoint: .top, endPoint: .bottom),
-                lineWidth: 1)
+            // A brighter top edge is what makes a rectangle read as glass:
+            // it is the light catching the lip.
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+              .strokeBorder(LinearGradient(
+                colors: [Argon.hairlineBright, Argon.hairline],
+                startPoint: .top, endPoint: .bottom), lineWidth: 1)
           }
-          .shadow(color: .black.opacity(0.35), radius: 18, y: 10)
+          // Black for depth, blue for life. The blue one is what stops a card
+          // reading as grey plastic on a slate ground.
+          .shadow(color: .black.opacity(0.55), radius: 22, y: 12)
+          .shadow(color: tint.opacity(0.28), radius: 18, y: 4)
       }
       .environment(\.colorScheme, .dark)
   }
 }
 
-/// A row inside glass, without the material stacking twice.
-struct ArgonDivider: View {
-  var body: some View {
-    Rectangle().fill(Argon.hairline).frame(height: 1)
+extension View {
+  /// Light coming out of the surface, not a drop shadow under it.
+  ///
+  /// This is the quality the logo has and a flat card does not: a lit object
+  /// on a dark ground, with the falloff doing the work. Two shadows — a tight
+  /// bright one and a wide soft one — because a single radius reads as blur
+  /// rather than as glow.
+  func argonGlow(_ colour: Color = Argon.accent, strength: Double = 1) -> some View {
+    shadow(color: colour.opacity(0.45 * strength), radius: 10 * strength)
+      .shadow(color: colour.opacity(0.22 * strength), radius: 28 * strength)
   }
 }
 
-/// Small capsule for a status word — due date, period, count.
+/// The soft radial light the logo is built from. Sits behind a heading or an
+/// empty state so the screen has a source of light rather than flat fills.
+struct ArgonBloom: View {
+  var colour: Color = Argon.accent
+  var size: CGFloat = 260
+  var opacity: Double = 0.55
+
+  var body: some View {
+    Circle()
+      .fill(RadialGradient(
+        colors: [colour.opacity(opacity), colour.opacity(opacity * 0.35), .clear],
+        center: .center, startRadius: 0, endRadius: size / 2))
+      .frame(width: size, height: size)
+      .blur(radius: 26)
+      .allowsHitTesting(false)
+  }
+}
+
+struct ArgonDivider: View {
+  var body: some View { Rectangle().fill(Argon.hairline).frame(height: 1) }
+}
+
+/// A status word: a due date, a period, a count.
 struct ArgonPill: View {
   let text: String
-  var colour: Color = Argon.Tone.secondary
+  var colour: Color = Argon.accentSoft
 
   var body: some View {
     Text(text)
       .font(Argon.label)
       .foregroundStyle(colour)
-      .padding(.horizontal, 8).padding(.vertical, 3)
-      .background(Capsule().fill(colour.opacity(0.13)))
-      .overlay(Capsule().strokeBorder(colour.opacity(0.20), lineWidth: 0.5))
+      .padding(.horizontal, 10).padding(.vertical, 5)
+      .background(Capsule().fill(colour.opacity(0.20)))
+      .overlay(Capsule().strokeBorder(colour.opacity(0.45), lineWidth: 1))
+      .shadow(color: colour.opacity(0.35), radius: 8)
+      .fixedSize(horizontal: true, vertical: false)
   }
 }
 
@@ -180,9 +224,10 @@ struct ArgonPulse: View {
   var body: some View {
     Circle()
       .fill(colour)
-      .frame(width: 7, height: 7)
-      .overlay(Circle().stroke(colour.opacity(on ? 0 : 0.6), lineWidth: on ? 7 : 0))
-      .opacity(on ? 0.75 : 1)
+      .frame(width: 9, height: 9)
+      .shadow(color: colour.opacity(0.9), radius: 7)
+      .overlay(Circle().stroke(colour.opacity(on ? 0 : 0.7), lineWidth: on ? 9 : 0))
+      .opacity(on ? 0.8 : 1)
       .animation(.easeOut(duration: 1.8).repeatForever(autoreverses: false), value: on)
       .onAppear { on = true }
   }

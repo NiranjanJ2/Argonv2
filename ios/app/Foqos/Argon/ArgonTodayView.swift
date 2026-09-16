@@ -2,10 +2,6 @@ import SwiftUI
 
 /// What he opens the app to see: what's due, what he's on, and whether any of
 /// it can be trusted right now.
-///
-/// A ScrollView of glass rather than a List: `List` insists on its own
-/// background and separators, and fighting it to sit over the ambient field
-/// costs more than laying the cards out directly.
 struct ArgonTodayView: View {
   let store: ArgonStore
   @State private var newTask = ""
@@ -13,63 +9,91 @@ struct ArgonTodayView: View {
   @FocusState private var addFocused: Bool
 
   var body: some View {
-    ZStack {
-      ArgonAmbience.now(ticking: store.state.ticking)
-
-      ScrollView {
-        VStack(spacing: 14) {
-          header
-          if let failure = store.failure { ArgonFailureCard(text: failure) { store.dismissFailure() } }
-          if let started = store.state.started { runningCard(started) }
-          boardCard
-          if !store.state.facts.isEmpty { factsCard }
-          budgetCard
+    ScrollView {
+      VStack(alignment: .leading, spacing: 16) {
+        header
+        if let failure = store.failure {
+          ArgonFailureCard(text: failure) { store.dismissFailure() }
         }
-        .padding(.horizontal, 16)
-        .padding(.bottom, 32)
+        statusCard
+        boardCard
+        if !store.state.facts.isEmpty { factsCard }
+        budgetCard
+        Color.clear.frame(height: 24)
       }
-      .scrollIndicators(.hidden)
-      .refreshable { await store.refresh() }
+      .padding(.horizontal, 18)
     }
-    .toolbarBackground(.hidden, for: .navigationBar)
+    .scrollIndicators(.hidden)
+    .refreshable { await store.refresh() }
+    .argonAmbience(ticking: store.state.ticking)
     .animation(.spring(duration: 0.35), value: store.state.tasks)
   }
 
-  // MARK: pieces
+  // MARK: header
 
   private var header: some View {
-    HStack(alignment: .firstTextBaseline) {
-      VStack(alignment: .leading, spacing: 2) {
-        Text("Today").font(Argon.title).foregroundStyle(Argon.Tone.primary)
-        Text(subtitle).font(Argon.label).foregroundStyle(Argon.Tone.faint)
+    VStack(alignment: .leading, spacing: 6) {
+      HStack(alignment: .firstTextBaseline) {
+        Text("Today")
+          .font(Argon.screenTitle)
+          .foregroundStyle(Argon.Tone.primary)
+          .background(alignment: .leading) {
+            // The screen has a source of light, off behind the title.
+            ArgonBloom(size: 300, opacity: store.state.ticking ? 0.5 : 0.18)
+              .offset(x: -60, y: -30)
+          }
+        Spacer()
+        ArgonStatusDot(store: store)
       }
-      Spacer()
-      ArgonStatusDot(store: store)
+      Text(subtitle)
+        .font(Argon.detail)
+        .foregroundStyle(Argon.Tone.secondary)
     }
-    .padding(.top, 8)
+    .padding(.top, 10)
   }
 
   private var subtitle: String {
     if let period = store.state.school.period { return "In \(period)" }
-    return store.state.school.schedule ?? Date().formatted(date: .complete, time: .omitted)
+    if let schedule = store.state.school.schedule { return schedule }
+    return Date().formatted(date: .complete, time: .omitted)
   }
 
-  private func runningCard(_ task: ArgonTask) -> some View {
-    ArgonGlass(tint: Argon.running) {
-      HStack(spacing: 12) {
-        ArgonPulse()
-        VStack(alignment: .leading, spacing: 3) {
-          Text(task.title).font(Argon.heading).foregroundStyle(Argon.Tone.primary)
-          if let since = task.startedAt.flatMap(ArgonDate.parse) {
-            Text("since \(since.formatted(date: .omitted, time: .shortened))")
-              .font(Argon.label).foregroundStyle(Argon.Tone.faint)
+  // MARK: cards
+
+  @ViewBuilder private var statusCard: some View {
+    if let started = store.state.started {
+      ArgonGlass(tint: Argon.running) {
+        HStack(spacing: 14) {
+          ArgonPulse()
+          VStack(alignment: .leading, spacing: 3) {
+            Text(started.title)
+              .font(Argon.cardTitle)
+              .foregroundStyle(Argon.Tone.primary)
+            if let since = started.startedAt.flatMap(ArgonDate.parse) {
+              Text("working since \(since.formatted(date: .omitted, time: .shortened))")
+                .font(Argon.detail)
+                .foregroundStyle(Argon.Tone.secondary)
+            }
+          }
+          Spacer(minLength: 8)
+          Button("Done") { Task { await store.complete(started) } }
+            .font(Argon.heading)
+            .foregroundStyle(Argon.running)
+            .buttonStyle(.plain)
+        }
+      }
+    } else if !store.state.ticking {
+      ArgonGlass(tint: Argon.accentDeep) {
+        HStack(spacing: 14) {
+          Image(systemName: "moon.stars.fill")
+            .font(.title2)
+            .foregroundStyle(Argon.accentSoft)
+          VStack(alignment: .leading, spacing: 2) {
+            Text("Off duty").font(Argon.heading).foregroundStyle(Argon.Tone.primary)
+            Text("Argon watches 4pm to midnight on school nights")
+              .font(Argon.detail).foregroundStyle(Argon.Tone.secondary)
           }
         }
-        Spacer()
-        Button { Task { await store.complete(task) } } label: {
-          Text("Done").font(Argon.label).foregroundStyle(Argon.running)
-        }
-        .buttonStyle(.plain)
       }
     }
   }
@@ -78,27 +102,29 @@ struct ArgonTodayView: View {
     ArgonGlass(padding: 0) {
       VStack(spacing: 0) {
         HStack {
-          Text("Open").font(Argon.heading).foregroundStyle(Argon.Tone.primary)
+          Text("Open").font(Argon.cardTitle).foregroundStyle(Argon.Tone.primary)
           Spacer()
           if store.state.overdueCount > 0 {
             ArgonPill(text: "\(store.state.overdueCount) overdue", colour: Argon.overdue)
+          } else if !store.state.sortedTasks.isEmpty {
+            ArgonPill(text: "\(store.state.sortedTasks.count)")
           }
         }
-        .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 10)
+        .padding(.horizontal, 18).padding(.top, 18).padding(.bottom, 12)
 
         if store.state.sortedTasks.isEmpty {
           Text(store.connection.isLive ? "Nothing open." : "Nothing cached.")
             .font(Argon.body).foregroundStyle(Argon.Tone.faint)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 16).padding(.bottom, 14)
+            .padding(.horizontal, 18).padding(.bottom, 18)
         }
 
         ForEach(store.state.sortedTasks) { task in
-          ArgonDivider().padding(.leading, 16)
+          ArgonDivider().padding(.leading, 18)
           ArgonTaskRow(task: task, store: store)
         }
 
-        ArgonDivider().padding(.leading, 16)
+        ArgonDivider().padding(.leading, 18)
         addRow
       }
     }
@@ -107,14 +133,17 @@ struct ArgonTodayView: View {
   private var addRow: some View {
     Group {
       if adding {
-        HStack(spacing: 10) {
-          Image(systemName: "plus").font(.caption).foregroundStyle(Argon.accent)
+        HStack(spacing: 12) {
+          Image(systemName: "plus.circle.fill")
+            .font(.title3).foregroundStyle(Argon.accent)
+            .argonGlow(strength: 0.6)
           TextField("", text: $newTask, prompt:
                       Text("New task").foregroundStyle(Argon.Tone.faint))
             .font(Argon.body).foregroundStyle(Argon.Tone.primary)
             .focused($addFocused).submitLabel(.done).onSubmit(commit)
           Button("Add", action: commit)
-            .font(Argon.label).foregroundStyle(Argon.accent)
+            .font(Argon.heading).foregroundStyle(Argon.accent)
+            .buttonStyle(.plain)
             .disabled(newTask.trimmingCharacters(in: .whitespaces).isEmpty)
         }
       } else {
@@ -122,26 +151,27 @@ struct ArgonTodayView: View {
           adding = true
           addFocused = true
         } label: {
-          HStack(spacing: 10) {
-            Image(systemName: "plus").font(.caption)
+          HStack(spacing: 12) {
+            Image(systemName: "plus.circle.fill").font(.title3)
             Text("Add a task").font(Argon.body)
             Spacer()
           }
-          .foregroundStyle(Argon.Tone.faint)
+          .foregroundStyle(Argon.accent.opacity(0.85))
         }
         .buttonStyle(.plain)
       }
     }
-    .padding(.horizontal, 16).padding(.vertical, 13)
+    .padding(.horizontal, 18).padding(.vertical, 15)
   }
 
   private var factsCard: some View {
-    ArgonGlass {
-      VStack(alignment: .leading, spacing: 8) {
-        Text("What Argon knows").font(Argon.heading).foregroundStyle(Argon.Tone.primary)
+    ArgonGlass(tint: Argon.accentDeep) {
+      VStack(alignment: .leading, spacing: 10) {
+        Text("What Argon knows")
+          .font(Argon.heading).foregroundStyle(Argon.Tone.primary)
         ForEach(store.state.facts, id: \.self) { fact in
-          HStack(alignment: .top, spacing: 8) {
-            Circle().fill(Argon.accentDim).frame(width: 4, height: 4).padding(.top, 7)
+          HStack(alignment: .top, spacing: 10) {
+            Circle().fill(Argon.accent).frame(width: 5, height: 5).padding(.top, 8)
             Text(fact).font(Argon.body).foregroundStyle(Argon.Tone.secondary)
           }
         }
@@ -151,24 +181,27 @@ struct ArgonTodayView: View {
 
   @ViewBuilder private var budgetCard: some View {
     if let budget = store.state.budget, budget.cap > 0 {
-      ArgonGlass {
-        VStack(alignment: .leading, spacing: 8) {
+      ArgonGlass(padding: 16) {
+        VStack(alignment: .leading, spacing: 10) {
           HStack {
-            Text("This month").font(Argon.label).foregroundStyle(Argon.Tone.faint)
+            Text("This month").font(Argon.label).foregroundStyle(Argon.Tone.secondary)
             Spacer()
-            Text(String(format: "$%.2f / $%.0f", budget.spent, budget.cap))
+            Text(String(format: "$%.2f of $%.0f", budget.spent, budget.cap))
               .font(Argon.mono)
-              .foregroundStyle(budget.isNearCap ? Argon.overdue : Argon.Tone.secondary)
+              .foregroundStyle(budget.isNearCap ? Argon.overdue : Argon.Tone.primary)
           }
           GeometryReader { geo in
             ZStack(alignment: .leading) {
-              Capsule().fill(Color.white.opacity(0.07))
+              Capsule().fill(Color.white.opacity(0.10))
               Capsule()
-                .fill(budget.isNearCap ? Argon.overdue : Argon.accent)
-                .frame(width: geo.size.width * min(budget.spent / budget.cap, 1))
+                .fill(LinearGradient(
+                  colors: budget.isNearCap ? [Argon.overdue, Argon.overdue]
+                                           : [Argon.accentDeep, Argon.accent],
+                  startPoint: .leading, endPoint: .trailing))
+                .frame(width: max(6, geo.size.width * min(budget.spent / budget.cap, 1)))
             }
           }
-          .frame(height: 4)
+          .frame(height: 6)
           if budget.isNearCap {
             Text("Argon goes quiet at the cap.")
               .font(Argon.label).foregroundStyle(Argon.overdue)
@@ -193,20 +226,21 @@ struct ArgonTaskRow: View {
   let store: ArgonStore
 
   var body: some View {
-    HStack(spacing: 12) {
+    HStack(spacing: 14) {
       Button { Task { await store.complete(task) } } label: {
         Image(systemName: task.done ? "checkmark.circle.fill" : "circle")
-          .font(.system(size: 19))
+          .font(.title2)
           .foregroundStyle(task.done ? Argon.running : Argon.Tone.faint)
       }
       .buttonStyle(.plain)
       .disabled(task.isLocal)
 
-      VStack(alignment: .leading, spacing: 2) {
+      VStack(alignment: .leading, spacing: 3) {
         Text(task.title)
           .font(Argon.body)
           .foregroundStyle(task.isLocal ? Argon.Tone.faint : Argon.Tone.primary)
           .strikethrough(task.done, color: Argon.Tone.faint)
+          .fixedSize(horizontal: false, vertical: true)
         if let subject = task.subject, !subject.isEmpty {
           Text(subject).font(Argon.label).foregroundStyle(Argon.Tone.faint)
         } else if task.isLocal {
@@ -217,16 +251,16 @@ struct ArgonTaskRow: View {
       Spacer(minLength: 8)
 
       if task.isStarted {
-        Image(systemName: "play.fill").font(.system(size: 9)).foregroundStyle(Argon.running)
+        Image(systemName: "play.fill").font(.caption).foregroundStyle(Argon.running)
       }
       let label = task.dueLabel()
       if !label.isEmpty {
         ArgonPill(text: label,
                   colour: label == "overdue" ? Argon.overdue
-                        : label == "today" ? Argon.accent : Argon.Tone.faint)
+                        : label == "today" ? Argon.accentSoft : Argon.Tone.faint)
       }
     }
-    .padding(.horizontal, 16).padding(.vertical, 11)
+    .padding(.horizontal, 18).padding(.vertical, 14)
     .contentShape(Rectangle())
     .swipeActions(edge: .leading, allowsFullSwipe: true) {
       if !task.isStarted && !task.isLocal {
@@ -244,23 +278,23 @@ struct ArgonStatusDot: View {
   let store: ArgonStore
 
   var body: some View {
-    HStack(spacing: 7) {
+    HStack(spacing: 8) {
       if store.pendingCount > 0 {
-        ArgonPill(text: "\(store.pendingCount) queued", colour: Argon.accent)
+        ArgonPill(text: "\(store.pendingCount) queued")
       }
       if store.isLoading {
-        ProgressView().controlSize(.mini).tint(Argon.Tone.faint)
+        ProgressView().controlSize(.small).tint(Argon.accentSoft)
       } else {
         switch store.connection {
         case .never:
           ArgonPill(text: "offline", colour: Argon.Tone.faint)
         case .live:
-          HStack(spacing: 5) {
-            Circle().fill(Argon.running).frame(width: 6, height: 6)
-            Text("live").font(Argon.label).foregroundStyle(Argon.Tone.faint)
+          HStack(spacing: 6) {
+            Circle().fill(Argon.running).frame(width: 7, height: 7)
+            Text("live").font(Argon.label).foregroundStyle(Argon.Tone.secondary)
           }
         case .stale(let at, _):
-          ArgonPill(text: at.argonAgo, colour: Argon.overdue)
+          ArgonPill(text: at.argonAgo, colour: Argon.Tone.faint)
         }
       }
     }
@@ -272,14 +306,15 @@ struct ArgonFailureCard: View {
   let dismiss: () -> Void
 
   var body: some View {
-    ArgonGlass(tint: Argon.overdue) {
-      HStack(alignment: .top, spacing: 10) {
+    ArgonGlass(tint: Argon.overdue, padding: 16) {
+      HStack(alignment: .top, spacing: 12) {
         Image(systemName: "exclamationmark.triangle.fill")
-          .font(.caption).foregroundStyle(Argon.overdue)
-        Text(text).font(Argon.label).foregroundStyle(Argon.Tone.secondary)
-        Spacer()
+          .font(.body).foregroundStyle(Argon.overdue)
+        Text(text).font(Argon.detail).foregroundStyle(Argon.Tone.primary)
+        Spacer(minLength: 4)
         Button("Dismiss", action: dismiss)
-          .font(Argon.label).foregroundStyle(Argon.Tone.faint)
+          .font(Argon.label).foregroundStyle(Argon.Tone.secondary)
+          .buttonStyle(.plain)
       }
     }
   }

@@ -34,7 +34,7 @@ enum ArgonPalette {
   /// The one accent. Used for selection and for nothing decorative.
   static let electricBlue = Argon.accent
   static let iceBlue = Color(red: 0.561, green: 0.761, blue: 0.898)
-  static let cobalt = Argon.accentDim
+  static let cobalt = Argon.accentDeep
   static let cyan = Color(red: 0.388, green: 0.784, blue: 0.910)
 
   /// Body text at full strength, and the quieter tier for captions.
@@ -50,7 +50,10 @@ extension Font {
   /// to read than the system face at the same size — and every other line in
   /// the app was already system, so it read as a different app's heading.
   static func argonDisplay(_ size: CGFloat, weight: Font.Weight = .semibold) -> Font {
-    .system(size: size, weight: weight, design: .default)
+    // `.custom(size:relativeTo:)`, not `.system(size:)`: call sites pass a
+    // point size but it must still scale with the text size he chose in
+    // Settings. A fixed size ignores that completely.
+    .system(size: size, weight: weight, design: .rounded)
   }
 }
 
@@ -178,17 +181,17 @@ struct ArgonChoiceButton: View {
     Button(action: action) {
       HStack(spacing: 10) {
         Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-          .font(.system(size: 17))
+          .font(.body)
           .foregroundStyle(isSelected ? ArgonPalette.electricBlue : ArgonPalette.mutedInk)
 
         VStack(alignment: .leading, spacing: 2) {
           Text(title)
-            .font(.system(size: 15))
+            .font(.callout)
             .foregroundStyle(ArgonPalette.ink)
             .multilineTextAlignment(.leading)
           if let caption, !caption.isEmpty {
             Text(caption)
-              .font(.system(size: 12))
+              .font(.footnote)
               .foregroundStyle(ArgonPalette.mutedInk)
           }
         }
@@ -223,7 +226,7 @@ struct ArgonPrimaryButtonStyle: ButtonStyle {
 
     var body: some View {
       configuration.label
-        .font(.system(size: 16, weight: .semibold))
+        .font(.callout.weight(.semibold))
         .foregroundStyle(isEnabled ? ArgonPalette.ink : ArgonPalette.mutedInk)
         .frame(maxWidth: .infinity)
         .frame(height: 50)
@@ -240,7 +243,7 @@ struct ArgonPrimaryButtonStyle: ButtonStyle {
 struct ArgonSecondaryButtonStyle: ButtonStyle {
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
-      .font(.system(size: 16, weight: .medium))
+      .font(.callout.weight(.medium))
       .foregroundStyle(ArgonPalette.mutedInk)
       .frame(maxWidth: .infinity)
       .frame(height: 50)
@@ -307,7 +310,7 @@ extension View {
 /// subset of these files and should not have to pull in the whole design
 /// system to paint four labels.
 enum ArgonWidgetPalette {
-  static let canvas = Argon.Ink.void
+  static let canvas = Argon.Ink.base
   static let surface = Argon.Ink.slate
   static let accent = Argon.accent
   static let ink = Argon.Tone.primary
