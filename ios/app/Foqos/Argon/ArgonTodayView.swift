@@ -274,6 +274,8 @@ struct ArgonTaskRow: View {
           .font(Argon.body)
           .foregroundStyle(task.isLocal ? Argon.Tone.faint : Argon.Tone.primary)
           .strikethrough(task.done, color: Argon.Tone.faint)
+          // Two lines, or one Codecademy assignment becomes a four-line row.
+          .lineLimit(2)
           .fixedSize(horizontal: false, vertical: true)
         if let subject = task.subject, !subject.isEmpty {
           Text(subject).font(Argon.label).foregroundStyle(Argon.Tone.faint)
