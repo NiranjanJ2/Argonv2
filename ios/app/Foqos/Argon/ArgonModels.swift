@@ -168,7 +168,21 @@ struct ArgonState: Codable, Equatable {
   }
 
   var started: ArgonTask? { tasks.first { $0.isStarted && !$0.done } }
-  var overdueCount: Int { tasks.filter { !$0.done && $0.isOverdue }.count }
+  var overdueCount: Int { overdue.count }
+
+  /// Work that is still live: due today, or ahead, or undated.
+  ///
+  /// Split from the overdue pile because they answer different questions.
+  /// With twenty-two items three weeks late, sorting everything by date put
+  /// August at the top and tomorrow fifty rows down — the board was truthful
+  /// and useless.
+  var upcoming: [ArgonTask] { sortedTasks.filter { !$0.isOverdue } }
+
+  /// Late work, most recent first: the newest miss is the one he might still
+  /// rescue, and the August ones are archaeology.
+  var overdue: [ArgonTask] {
+    sortedTasks.filter { $0.isOverdue }.sorted { ($0.due ?? "") > ($1.due ?? "") }
+  }
 }
 
 struct ArgonMessagesResponse: Codable {

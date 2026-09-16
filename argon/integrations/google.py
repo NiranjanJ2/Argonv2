@@ -19,6 +19,7 @@ call, which was a known cost in the old system and never fixed.
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timedelta
 from functools import lru_cache
 from typing import Any
@@ -352,7 +353,7 @@ def outstanding_assignments(account: str, days_back: int = STALE_AFTER_DAYS
             if due and due < cutoff:
                 continue
             out.append({"id": cw["id"], "title": cw.get("title") or "(untitled)",
-                        "course": name, "due": due, "courseId": cid})
+                        "course": tidy_course(name), "due": due, "courseId": cid})
     out.sort(key=lambda a: (a["due"] == "", a["due"]))
     return out, refused
 
@@ -382,6 +383,19 @@ def list_assignments(account: str, limit: int = 30, days_back: int = STALE_AFTER
     if refused:
         text += "\n(could not read: " + ", ".join(refused) + ")"
     return text
+
+
+#: Year suffixes teachers put on course names. "Math Analysis/Calc A
+#: H-Machado(26-27)" wraps to two lines on a phone and the year tells him
+#: nothing he does not know.
+_YEAR_SUFFIX = re.compile(
+    r"\s*[\(\[]?\s*'?\d{2}\s*[-/–]\s*'?\d{2}\s*[\)\]]?\s*$")
+
+
+def tidy_course(name: str) -> str:
+    """Strip the year off a Classroom course name."""
+    cleaned = _YEAR_SUFFIX.sub("", name or "").strip(" -–—")
+    return cleaned or name
 
 
 def _due_key(work: dict[str, Any]) -> tuple:
@@ -489,6 +503,14 @@ def _selftest() -> None:
         assert can("halfschool", "classroom"), "the grant v1 used must be accepted"
         assert account_for("classroom", ["halfschool"]) == "halfschool"
         assert missing_scope("classroom") == "classroom.student-submissions.me.readonly"
+
+        # Course names lose the year; everything else survives intact.
+        assert tidy_course("Math Analysis/Calc A H-Machado(26-27)") == "Math Analysis/Calc A H-Machado"
+        assert tidy_course("WHS Robotics Cabinet 26/27") == "WHS Robotics Cabinet"
+        assert tidy_course("Kokoro Kara '26-'27") == "Kokoro Kara"
+        assert tidy_course("APUSH PM") == "APUSH PM"
+        assert tidy_course("Japanese 4 & AP") == "Japanese 4 & AP"
+        assert tidy_course("") == ""
         # The documented alternate scope still satisfies it.
         write_token("alt", EQUIVALENT["classroom"])
         assert can("alt", "classroom")

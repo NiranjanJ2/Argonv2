@@ -6,6 +6,7 @@ struct ArgonTodayView: View {
   let store: ArgonStore
   @State private var newTask = ""
   @State private var adding = false
+  @State private var showOverdue = false
   @FocusState private var addFocused: Bool
 
   var body: some View {
@@ -17,6 +18,7 @@ struct ArgonTodayView: View {
         }
         statusCard
         boardCard
+        overdueCard
         if !store.state.facts.isEmpty { factsCard }
         budgetCard
         Color.clear.frame(height: 24)
@@ -102,24 +104,22 @@ struct ArgonTodayView: View {
     ArgonGlass(padding: 0) {
       VStack(spacing: 0) {
         HStack {
-          Text("Open").font(Argon.cardTitle).foregroundStyle(Argon.Tone.primary)
+          Text("Due").font(Argon.cardTitle).foregroundStyle(Argon.Tone.primary)
           Spacer()
-          if store.state.overdueCount > 0 {
-            ArgonPill(text: "\(store.state.overdueCount) overdue", colour: Argon.overdue)
-          } else if !store.state.sortedTasks.isEmpty {
-            ArgonPill(text: "\(store.state.sortedTasks.count)")
+          if !store.state.upcoming.isEmpty {
+            ArgonPill(text: "\(store.state.upcoming.count)")
           }
         }
         .padding(.horizontal, 18).padding(.top, 18).padding(.bottom, 12)
 
-        if store.state.sortedTasks.isEmpty {
-          Text(store.connection.isLive ? "Nothing open." : "Nothing cached.")
+        if store.state.upcoming.isEmpty {
+          Text(store.connection.isLive ? "Nothing due." : "Nothing cached.")
             .font(Argon.body).foregroundStyle(Argon.Tone.faint)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 18).padding(.bottom, 18)
         }
 
-        ForEach(store.state.sortedTasks) { task in
+        ForEach(store.state.upcoming) { task in
           ArgonDivider().padding(.leading, 18)
           ArgonTaskRow(task: task, store: store)
         }
@@ -162,6 +162,38 @@ struct ArgonTodayView: View {
       }
     }
     .padding(.horizontal, 18).padding(.vertical, 15)
+  }
+
+  /// Late work, behind a count. Twenty-two red pills on the main board made
+  /// every row look equally urgent, which is the same as none of them being.
+  @ViewBuilder private var overdueCard: some View {
+    if !store.state.overdue.isEmpty {
+      ArgonGlass(tint: Argon.overdue, padding: 0) {
+        VStack(spacing: 0) {
+          Button {
+            withAnimation(.spring(duration: 0.3)) { showOverdue.toggle() }
+          } label: {
+            HStack {
+              Text("Late").font(Argon.cardTitle).foregroundStyle(Argon.Tone.primary)
+              ArgonPill(text: "\(store.state.overdue.count)", colour: Argon.overdue)
+              Spacer()
+              Image(systemName: showOverdue ? "chevron.up" : "chevron.down")
+                .font(.footnote).foregroundStyle(Argon.Tone.faint)
+            }
+            .padding(.horizontal, 18).padding(.vertical, 18)
+            .contentShape(Rectangle())
+          }
+          .buttonStyle(.plain)
+
+          if showOverdue {
+            ForEach(store.state.overdue) { task in
+              ArgonDivider().padding(.leading, 18)
+              ArgonTaskRow(task: task, store: store, showDue: true)
+            }
+          }
+        }
+      }
+    }
   }
 
   private var factsCard: some View {
@@ -224,6 +256,8 @@ struct ArgonTodayView: View {
 struct ArgonTaskRow: View {
   let task: ArgonTask
   let store: ArgonStore
+  /// Inside the Late card every row is late, so the date is what varies.
+  var showDue = false
 
   var body: some View {
     HStack(spacing: 14) {
@@ -243,6 +277,7 @@ struct ArgonTaskRow: View {
           .fixedSize(horizontal: false, vertical: true)
         if let subject = task.subject, !subject.isEmpty {
           Text(subject).font(Argon.label).foregroundStyle(Argon.Tone.faint)
+            .lineLimit(1).truncationMode(.tail)
         } else if task.isLocal {
           Text("saving…").font(Argon.label).foregroundStyle(Argon.Tone.faint)
         }
@@ -253,10 +288,12 @@ struct ArgonTaskRow: View {
       if task.isStarted {
         Image(systemName: "play.fill").font(.caption).foregroundStyle(Argon.running)
       }
-      let label = task.dueLabel()
+      let label = showDue ? (task.due.map { String($0.prefix(10).dropFirst(5)) } ?? "")
+                          : task.dueLabel()
       if !label.isEmpty {
         ArgonPill(text: label,
-                  colour: label == "overdue" ? Argon.overdue
+                  colour: showDue ? Argon.Tone.faint
+                        : label == "overdue" ? Argon.overdue
                         : label == "today" ? Argon.accentSoft : Argon.Tone.faint)
       }
     }
