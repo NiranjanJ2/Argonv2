@@ -28,7 +28,7 @@ struct ArgonTodayView: View {
     // Clears the floating tab bar. A trailing spacer is not enough: when the
     // content already fits there is nothing to scroll, so the last card just
     // sits underneath the bar.
-    .contentMargins(.bottom, 72, for: .scrollContent)
+    .contentMargins(.bottom, 96, for: .scrollContent)
     .refreshable { await store.refresh() }
     .argonAmbience(ticking: store.state.ticking)
     .animation(.spring(duration: 0.35), value: store.state.tasks)
@@ -74,6 +74,10 @@ struct ArgonTodayView: View {
             Text(started.title)
               .font(Argon.cardTitle)
               .foregroundStyle(Argon.Tone.primary)
+              // Unbounded, a real Codecademy title took five lines at default
+              // and eight at the largest text size, pushing the board off the
+              // fold. Every other row caps at two; so does this.
+              .lineLimit(2)
             if let since = started.startedAt.flatMap(ArgonDate.parse) {
               Text("working since \(since.formatted(date: .omitted, time: .shortened))")
                 .font(Argon.detail)
@@ -122,7 +126,9 @@ struct ArgonTodayView: View {
             .padding(.horizontal, 18).padding(.bottom, 18)
         }
 
-        ForEach(store.state.upcoming) { task in
+        // The started task is the hero card above; repeating it here cost
+        // most of a screenful.
+        ForEach(store.state.upcoming.filter { !$0.isStarted }) { task in
           ArgonDivider().padding(.leading, 18)
           ArgonTaskRow(task: task, store: store)
         }

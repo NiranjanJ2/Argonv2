@@ -72,7 +72,9 @@ struct ArgonChatView: View {
       Button(action: send) {
         Image(systemName: "arrow.up")
           .font(.body.weight(.bold))
-          .foregroundStyle(canSend ? Color.white : Argon.Tone.faint)
+          // Was Tone.faint on 8% white — about 2.2:1, under the 3:1 minimum
+          // for a non-text element.
+          .foregroundStyle(canSend ? Color.white : Argon.Tone.secondary)
           .frame(width: 42, height: 42)
           .argonGlow(strength: canSend ? 0.9 : 0)
           .background {
@@ -84,6 +86,7 @@ struct ArgonChatView: View {
       }
       .buttonStyle(.plain)
       .disabled(!canSend)
+      .accessibilityLabel("Send message")
       .animation(.easeOut(duration: 0.15), value: canSend)
     }
     .padding(.horizontal, 18).padding(.vertical, 12)

@@ -90,7 +90,7 @@ struct ArgonSettingsView: View {
       // The floating tab bar sits over the last section otherwise. A trailing
       // spacer does not help: when the content already fits there is nothing
       // to scroll, so the footer just stays underneath the bar.
-      .contentMargins(.bottom, 72, for: .scrollContent)
+      .contentMargins(.bottom, 96, for: .scrollContent)
       // The ambience goes behind the Form itself. Applied to the
       // NavigationStack its GeometryReader resolved to nothing and the screen
       // came out pure black — no blue at all.

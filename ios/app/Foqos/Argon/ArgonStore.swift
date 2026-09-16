@@ -48,6 +48,9 @@ final class ArgonStore {
   /// foregrounding plus a silent push plus the background task can land
   /// together — two concurrent drains posted the same queued task twice.
   private var flushing = false
+  /// When the cache on disk was written. Used so a failed refresh reports the
+  /// age of what is actually on screen.
+  private var cachedAt: Date?
   private var highestSeq: Int? { messages.filter { !$0.pending }.map(\.seq).max() }
 
   init(client: ArgonClient, outbox: ArgonOutbox = ArgonOutbox(), cache: ArgonCache = ArgonCache()) {
@@ -57,6 +60,7 @@ final class ArgonStore {
     if let snapshot = cache.load() {
       state = snapshot.state
       messages = snapshot.messages
+      cachedAt = snapshot.at
       connection = .stale(at: snapshot.at, why: "cached")
     }
   }
@@ -87,7 +91,11 @@ final class ArgonStore {
       NotificationCenter.default.post(name: .argonStateApplied, object: nil)
     } catch {
       let text = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-      connection = .stale(at: lastRefresh ?? Date(), why: text)
+      // The cache's own timestamp, not `now`. Falling back to Date() made the
+      // header pill read "just now" directly above "Argon didn't answer in
+      // time", over data that was thirteen hours old — while Settings, from
+      // the same value, correctly said "cached 13h ago".
+      connection = .stale(at: lastRefresh ?? cachedAt ?? Date(), why: text)
       // A read failing is not worth a banner when there is cached data to show;
       // the connection badge already says so.
       if lastRefresh == nil {

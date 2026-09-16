@@ -33,7 +33,10 @@ enum Argon {
   enum Tone {
     static let primary = Color(red: 0.937, green: 0.957, blue: 0.984)
     static let secondary = Color(red: 0.639, green: 0.702, blue: 0.788)
-    static let faint = Color(red: 0.443, green: 0.502, blue: 0.588)
+    // Lifted for contrast: at the old value this was 4.02:1 on the card
+    // ground and 3.39:1 on a raised one, under the 4.5:1 minimum — and it
+    // carries subject lines, empty-state text and the date pills.
+    static let faint = Color(red: 0.522, green: 0.576, blue: 0.659)
   }
 
   /// Vivid enough to read as blue on a dark ground. The previous #6EA8D8 was
@@ -103,14 +106,17 @@ private struct ArgonAmbience: View {
                                  center: .center, startRadius: 0, endRadius: 320))
   }
 
+  // Resting is dimmer, not grey. Off duty covers every daylight hour, which
+  // is most of when he opens the app — draining the blue there meant "there
+  // is no colour" was only half fixed.
   private var top: Color {
-    resting ? Argon.Ink.slate.opacity(0.7)
+    resting ? Argon.accentDeep.opacity(0.26)
             : Argon.accentDeep.opacity(0.55 - 0.10 * evening)
   }
 
   private var bottom: Color {
-    resting ? Argon.Ink.deep.opacity(0.8)
-            : Color(red: 0.180, green: 0.267, blue: 0.561).opacity(0.50 + 0.10 * evening)
+    let night = Color(red: 0.180, green: 0.267, blue: 0.561)
+    return resting ? night.opacity(0.22) : night.opacity(0.50 + 0.10 * evening)
   }
 }
 
@@ -230,6 +236,7 @@ struct ArgonPulse: View {
     Circle()
       .fill(colour)
       .frame(width: 9, height: 9)
+      .accessibilityHidden(true)
       .shadow(color: colour.opacity(0.9), radius: 7)
       .overlay(Circle().stroke(colour.opacity(on ? 0 : 0.7), lineWidth: on ? 9 : 0))
       .opacity(on ? 0.8 : 1)

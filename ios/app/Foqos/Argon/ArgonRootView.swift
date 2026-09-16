@@ -7,7 +7,7 @@ struct ArgonRootView: View {
   @Environment(\.scenePhase) private var phase
   @State private var tab = Tab.today
 
-  enum Tab: Hashable { case today, chat, settings }
+  enum Tab: Hashable { case today, chat, focus, settings }
 
   var body: some View {
     TabView(selection: $tab) {
@@ -19,6 +19,15 @@ struct ArgonRootView: View {
         .tabItem { Label("Argon", systemImage: "bubble.left.and.bubble.right") }
         .badge(store.state.unread)
         .tag(Tab.chat)
+
+      // Foqos's own screen. Without this tab the entire blocking product —
+      // profiles, sessions, NFC and QR, schedules — has no entry point:
+      // `HomeView` appears nowhere else in the target except a #Preview, and
+      // `ArgonStatusCard` is dead UI. Blocking is what lets Argon enforce
+      // rather than ask, so losing the route to it loses the product.
+      HomeView()
+        .tabItem { Label("Focus", systemImage: "shield.lefthalf.filled") }
+        .tag(Tab.focus)
 
       ArgonSettingsView(store: store)
         .tabItem { Label("Settings", systemImage: "gearshape") }
