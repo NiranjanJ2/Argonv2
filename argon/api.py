@@ -75,7 +75,8 @@ def create_app(rt) -> Flask:
         return {
             "id": t.id, "title": t.title, "done": t.done, "priority": t.priority,
             "source": t.source, "subject": t.subject, "notes": None, "due": t.due,
-            "classroom_id": None, "time_estimate_min": None,
+            "classroom_id": t.external_id if t.source == "classroom" else None,
+            "time_estimate_min": None,
             "time_actual_min": None, "started_at": t.started_at,
         }
 

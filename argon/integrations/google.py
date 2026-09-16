@@ -314,27 +314,19 @@ OUTSTANDING = ["CREATED", "RECLAIMED_BY_STUDENT"]
 STALE_AFTER_DAYS = 21
 
 
-def list_assignments(account: str, limit: int = 30, days_back: int = STALE_AFTER_DAYS) -> str:
-    """What he still owes, across his active courses.
+def outstanding_assignments(account: str, days_back: int = STALE_AFTER_DAYS
+                            ) -> tuple[list[dict[str, Any]], list[str]]:
+    """Work he still owes, as records rather than prose.
 
-    Two things this asks for that the obvious version does not:
-
-    ``courseWorkStates=["PUBLISHED"]`` — without it the API also tries to
-    return DRAFT work, which a *student* may not see, and the whole call comes
-    back 403 "The caller does not have permission", which reads exactly like a
-    missing scope and is not one.
-
-    ``studentSubmissions`` with ``courseWorkId="-"`` — one call per course
-    returning every submission, filtered to the states that mean "not handed
-    in". Without this the list is everything ever assigned, which is worse than
-    no list: he stops reading it.
+    ``list_assignments`` renders these for the model; the task board needs the
+    fields, so both call this. Returns (assignments, courses that refused).
     """
     svc = _service(account, "classroom", "v1")
     courses = {c["id"]: c.get("name", "?")
                for c in svc.courses().list(courseStates=["ACTIVE"]).execute().get("courses", [])}
     cutoff = (clock.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
 
-    items: list[dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     refused: list[str] = []
     for cid, name in courses.items():
         try:
@@ -350,8 +342,6 @@ def list_assignments(account: str, limit: int = 30, days_back: int = STALE_AFTER
                 courseId=cid, courseWorkStates=["PUBLISHED"],
                 orderBy="dueDate desc", pageSize=100).execute()
         except Exception as e:  # noqa: BLE001
-            # One course he cannot read must not hide the other five. A class
-            # silently missing from the board is the failure that costs him.
             refused.append(f"{name} ({type(e).__name__})")
             continue
 
@@ -360,10 +350,35 @@ def list_assignments(account: str, limit: int = 30, days_back: int = STALE_AFTER
                 continue
             _, due = _due_key(cw)
             if due and due < cutoff:
-                continue          # long overdue and clearly abandoned
-            items.append(cw)
+                continue
+            out.append({"id": cw["id"], "title": cw.get("title") or "(untitled)",
+                        "course": name, "due": due, "courseId": cid})
+    out.sort(key=lambda a: (a["due"] == "", a["due"]))
+    return out, refused
 
-    text = format_assignments(sorted(items, key=_due_key)[:limit], courses)
+
+def list_assignments(account: str, limit: int = 30, days_back: int = STALE_AFTER_DAYS) -> str:
+    """What he still owes, across his active courses.
+
+    Two things this asks for that the obvious version does not:
+
+    ``courseWorkStates=["PUBLISHED"]`` — without it the API also tries to
+    return DRAFT work, which a *student* may not see, and the whole call comes
+    back 403 "The caller does not have permission", which reads exactly like a
+    missing scope and is not one.
+
+    ``studentSubmissions`` with ``courseWorkId="-"`` — one call per course
+    returning every submission, filtered to the states that mean "not handed
+    in". Without this the list is everything ever assigned, which is worse than
+    no list: he stops reading it.
+    """
+    items, refused = outstanding_assignments(account, days_back)
+    if not items:
+        text = "No assignments outstanding."
+    else:
+        text = "\n".join(
+            f"- {a['title']} ({a['course']}) due {a['due'] or 'no due date'}"
+            for a in items[:limit])
     if refused:
         text += "\n(could not read: " + ", ".join(refused) + ")"
     return text

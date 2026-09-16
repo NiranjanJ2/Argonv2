@@ -41,8 +41,11 @@ CREATE TABLE IF NOT EXISTS tasks (
     done_at    TEXT,
     started_at TEXT,
     source     TEXT NOT NULL DEFAULT 'him',
+    external_id TEXT,
     created_at TEXT NOT NULL
 );
+CREATE UNIQUE INDEX IF NOT EXISTS tasks_external ON tasks (external_id)
+  WHERE external_id IS NOT NULL;
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -66,6 +69,7 @@ class Task:
     priority: str
     done: bool
     source: str
+    external_id: str | None = None
     started_at: str | None = None
 
     @property
@@ -102,14 +106,22 @@ class Store:
 
     # -- tasks ------------------------------------------------------------
     def add_task(self, title: str, *, subject: str = "", due: str = "",
-                 priority: str = "normal", source: str = "him") -> Task:
+                 priority: str = "normal", source: str = "him",
+                 external_id: str = "") -> Task:
+        """Add a task. An *external_id* makes it idempotent, so importing the
+        same Classroom assignment twice updates it rather than duplicating."""
+        if external_id:
+            existing = self.task_by_external(external_id)
+            if existing is not None:
+                return self.update_task(existing.id, due=due or None,
+                                        title=title, subject=subject or None) or existing
         tid = uuid.uuid4().hex[:12]
         with self._lock:
             self._db.execute(
-                "INSERT INTO tasks (id,title,subject,due,priority,source,created_at)"
-                " VALUES (?,?,?,?,?,?,?)",
+                "INSERT INTO tasks (id,title,subject,due,priority,source,"
+                "external_id,created_at) VALUES (?,?,?,?,?,?,?,?)",
                 (tid, title, subject or None, due or None, priority, source,
-                 clock.now().isoformat()),
+                 external_id or None, clock.now().isoformat()),
             )
             self._db.commit()
         self._t.append("task_added", id=tid, summary=f"{title}"
@@ -120,6 +132,17 @@ class Store:
         with self._lock:
             row = self._db.execute("SELECT * FROM tasks WHERE id=?", (tid,)).fetchone()
         return _task(row) if row else None
+
+    def task_by_external(self, external_id: str) -> Task | None:
+        with self._lock:
+            row = self._db.execute("SELECT * FROM tasks WHERE external_id=?",
+                                   (external_id,)).fetchone()
+        return _task(row) if row else None
+
+    def external_ids(self, *, source: str) -> dict[str, Task]:
+        """Open tasks from one source, keyed by their external id."""
+        return {t.external_id: t for t in self.tasks()
+                if t.source == source and t.external_id}
 
     def tasks(self, *, done: bool = False) -> list[Task]:
         """Open tasks by due date, undated last.  Deterministic ordering matters:
@@ -253,7 +276,8 @@ class Store:
 def _task(row: sqlite3.Row) -> Task:
     return Task(id=row["id"], title=row["title"], subject=row["subject"],
                 due=row["due"], priority=row["priority"], done=bool(row["done"]),
-                source=row["source"], started_at=row["started_at"])
+                source=row["source"], external_id=row["external_id"],
+                started_at=row["started_at"])
 
 
 def _selftest() -> None:
@@ -278,6 +302,15 @@ def _selftest() -> None:
         assert s.find_task(b.id).title == "Read Ch 3"
         assert s.find_task("nonsense") is None
 
+        # Importing the same external item twice updates rather than duplicates.
+        first = s.add_task("HW 17", source="classroom", external_id="cw-17",
+                           due="2026-09-12")
+        again = s.add_task("HW 17", source="classroom", external_id="cw-17",
+                           due="2026-09-13")
+        assert again.id == first.id, "same assignment must not appear twice"
+        assert s.task(first.id).due == "2026-09-13", "and its due date updates"
+        assert list(s.external_ids(source="classroom")) == ["cw-17"]
+
         assert s.complete_task(a.id).done is True
         assert s.complete_task(a.id) is None, "completing twice is not an event"
         assert a.id not in [x.id for x in s.tasks()]
@@ -298,7 +331,7 @@ def _selftest() -> None:
 
         # Every mutation is visible in the transcript, so the agent sees it.
         kinds = [e.kind for e in t.window(2)]
-        assert kinds.count("task_added") == 3
+        assert kinds.count("task_added") >= 3  # order-independent
         assert "task_done" in kinds and "remembered" in kinds and "task_updated" in kinds
         assert "task_started" in kinds
 

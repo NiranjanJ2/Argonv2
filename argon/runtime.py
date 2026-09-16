@@ -30,6 +30,10 @@ from argon.transcript import Transcript
 
 PROMPT = Path(__file__).parent / "prompts" / "argon.md"
 
+#: How often his Classroom work is pulled onto the board. A dozen Google calls,
+#: and homework does not change every five minutes.
+CLASSROOM_SYNC_MINUTES = 30
+
 
 def system_prompt() -> str:
     """Static for the whole day, so it caches.
@@ -55,6 +59,7 @@ class Runtime:
                            system_prompt())
         self.agent.deliver = self.deliver
         self._prompt_day = clock.day_key()
+        self._last_classroom_sync: datetime | None = None
         self._channels: list = []
         self._stop = threading.Event()
         # One turn at a time. The Flask thread, the tick loop and the Discord
@@ -191,6 +196,52 @@ class Runtime:
             self.transcript.append("push_failed",
                                    summary=f"{result.status} {result.reason}")
             raise RuntimeError(f"apns {result.status} {result.reason}")
+
+    def sync_classroom(self) -> str:
+        """Put his Classroom work on the task board.
+
+        Without this the board was empty while he had twenty assignments
+        outstanding — the agent could read them with a tool, but "what's due"
+        on his phone said "Nothing open". His homework *is* his task board.
+
+        Imports are keyed on the Classroom id, so running this repeatedly
+        updates rather than duplicates, and work that is no longer outstanding
+        (he handed it in, at school, on a laptop) is completed here.
+        """
+        account = google.account_for("classroom", self.cfg.google_accounts)
+        if account is None:
+            return "no Google account is authorised for classroom"
+        try:
+            items, refused = google.outstanding_assignments(account)
+        except google.GoogleUnavailable as e:
+            return str(e)
+        except Exception as e:  # noqa: BLE001
+            return f"Classroom sync failed: {type(e).__name__}: {e}"
+
+        known = self.store.external_ids(source="classroom")
+        seen: set[str] = set()
+        added = 0
+        for item in items:
+            seen.add(item["id"])
+            if item["id"] not in known:
+                added += 1
+            self.store.add_task(item["title"], subject=item["course"],
+                                due=item["due"] or "", source="classroom",
+                                external_id=item["id"])
+
+        # Anything he no longer owes is done, however he did it.
+        closed = 0
+        for external_id, task in known.items():
+            if external_id not in seen:
+                if self.store.complete_task(task.id):
+                    closed += 1
+
+        self._last_classroom_sync = clock.now()
+        note = f"classroom: {added} added, {closed} closed, {len(items)} outstanding"
+        if refused:
+            note += f" (could not read: {', '.join(refused)})"
+        self.transcript.append("classroom_sync", summary=note)
+        return note
 
     def remember_discord_channel(self, channel_id: str) -> None:
         """Write the channel he last used back to config, so a restart still
@@ -333,6 +384,10 @@ class Runtime:
                       "reason": {"type": "string"}})
         t.add("resume", "Come back on watch before the stand-down expires.", resume)
 
+        t.add("sync_classroom",
+              "Pull his Classroom work onto the task board. Runs on its own "
+              "every half hour; call it only if he says something is missing.",
+              self.sync_classroom)
         t.add("schedule_today", "Today's bell schedule.", lambda: bell.describe())
         t.add("set_ac", "Change the air conditioner.",
               lambda mac="", power=None, temp=None, mode=None: str(self.ac_set(
@@ -352,6 +407,17 @@ class Runtime:
         """One scheduled look.  Returns None when the clock says don't bother."""
         if not force and not schedule.should_tick():
             return None
+        # Keep the board current before deciding anything from it. Half-hourly,
+        # because it is a dozen Google calls and his homework does not change
+        # every five minutes.
+        if force or self._last_classroom_sync is None or (
+                clock.now() - self._last_classroom_sync
+        ).total_seconds() > CLASSROOM_SYNC_MINUTES * 60:
+            try:
+                self.sync_classroom()
+            except Exception as e:  # noqa: BLE001 - a bad sync must not stop the tick
+                self.transcript.append("classroom_sync_failed", summary=repr(e))
+
         # A commitment to silence is honoured, not re-litigated. This is not a
         # gate on judgement: the model made this decision and Python is only
         # remembering it. He can still reach Argon at any time — an inbound
@@ -512,6 +578,7 @@ def _selftest() -> None:
         assert "not connected" in _google(google.list_events, "nobody", 7)
         assert "No Google account is authorised for calendar" in \
             rt.tools.call("calendar", {}, background=True)
+        assert "no Google account is authorised" in rt.sync_classroom()
 
         # A channel that throws does not break delivery to the others.
         rt.add_channel(lambda _: (_ for _ in ()).throw(RuntimeError("discord down")))
