@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 from datetime import datetime, timedelta
 import time
 from pathlib import Path
@@ -460,13 +461,24 @@ class Runtime:
         return True
 
     def run(self) -> None:
-        """Tick until stopped."""
+        """Tick until stopped, on a fixed period rather than a fixed pause.
+
+        Waiting the full interval *after* the work makes the real period
+        `work + interval`: a turn plus a Classroom sync took nearly three
+        minutes and ticks drifted to almost eight apart. That matters beyond
+        tidiness — the prompt cache expires after a few idle minutes, so drift
+        turns warm ticks into full-price ones.
+        """
+        period = schedule.TICK_MINUTES * 60
         while not self._stop.is_set():
+            started = time.monotonic()
             try:
                 self.tick_once()
             except Exception as e:  # noqa: BLE001 - a bad tick must not end the loop
                 self.transcript.append("tick_failed", summary=repr(e))
-            self._stop.wait(schedule.TICK_MINUTES * 60)
+            elapsed = time.monotonic() - started
+            # Never busy-loop if a turn somehow outruns the interval.
+            self._stop.wait(max(30.0, period - elapsed))
 
     def stop(self) -> None:
         self._stop.set()
