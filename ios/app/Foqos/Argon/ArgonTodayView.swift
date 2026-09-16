@@ -21,11 +21,14 @@ struct ArgonTodayView: View {
         overdueCard
         if !store.state.facts.isEmpty { factsCard }
         budgetCard
-        Color.clear.frame(height: 24)
       }
       .padding(.horizontal, 18)
     }
     .scrollIndicators(.hidden)
+    // Clears the floating tab bar. A trailing spacer is not enough: when the
+    // content already fits there is nothing to scroll, so the last card just
+    // sits underneath the bar.
+    .contentMargins(.bottom, 72, for: .scrollContent)
     .refreshable { await store.refresh() }
     .argonAmbience(ticking: store.state.ticking)
     .animation(.spring(duration: 0.35), value: store.state.tasks)
