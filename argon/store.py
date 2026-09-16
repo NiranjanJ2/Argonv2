@@ -207,10 +207,22 @@ class Store:
         return self.task(tid)
 
     def update_task(self, tid: str, **changes: Any) -> Task | None:
-        allowed = {k: v for k, v in changes.items()
-                   if k in {"title", "subject", "due", "priority"} and v is not None}
-        if not allowed or self.task(tid) is None:
+        """Change a task. A change that changes nothing writes nothing.
+
+        The Classroom sync re-imports every assignment every half hour, so
+        without this it appended a `task_updated` event per assignment per
+        sync — 394 of them in one night. Those land in the two-day context the
+        model reads and are paid for on every tick, which makes a no-op import
+        genuinely expensive.
+        """
+        current = self.task(tid)
+        if current is None:
             return None
+        allowed = {k: v for k, v in changes.items()
+                   if k in {"title", "subject", "due", "priority"} and v is not None
+                   and getattr(current, k) != v}
+        if not allowed:
+            return current
         sets = ", ".join(f"{k}=?" for k in allowed)
         with self._lock:
             self._db.execute(f"UPDATE tasks SET {sets} WHERE id=?",
@@ -332,7 +344,16 @@ def _selftest() -> None:
         assert s.complete_task(a.id) is None, "completing twice is not an event"
         assert a.id not in [x.id for x in s.tasks()]
         assert s.update_task(b.id, priority="high").priority == "high"
-        assert s.update_task(b.id, bogus="x") is None, "unknown fields change nothing"
+        assert s.update_task(b.id, bogus="x") is not None, "a no-op still returns the task"
+
+        # A no-op update must not write an event: the Classroom sync re-imports
+        # every assignment every half hour and would otherwise flood the
+        # transcript the model reads.
+        before = len([e for e in t.window(2) if e.kind == "task_updated"])
+        s.update_task(b.id, priority="high")          # already high
+        s.update_task(b.id, title="Read Ch 3")        # already that title
+        after = len([e for e in t.window(2) if e.kind == "task_updated"])
+        assert before == after, f"no-op update wrote {after - before} events"
 
         assert s.start_task(b.id).started is True
         assert s.start_task(b.id) is None, "starting twice is not an event"
