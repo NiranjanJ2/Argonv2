@@ -217,8 +217,13 @@ struct ArgonPill: View {
 }
 
 /// A quiet pulse, for the one thing that is genuinely live.
+///
+/// Honours Reduce Motion: a dot that never stops expanding is exactly what
+/// that setting exists to stop. The glow stays, so the meaning survives
+/// without the movement.
 struct ArgonPulse: View {
   var colour: Color = Argon.running
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var on = false
 
   var body: some View {
@@ -228,7 +233,9 @@ struct ArgonPulse: View {
       .shadow(color: colour.opacity(0.9), radius: 7)
       .overlay(Circle().stroke(colour.opacity(on ? 0 : 0.7), lineWidth: on ? 9 : 0))
       .opacity(on ? 0.8 : 1)
-      .animation(.easeOut(duration: 1.8).repeatForever(autoreverses: false), value: on)
-      .onAppear { on = true }
+      .animation(reduceMotion ? nil
+                              : .easeOut(duration: 1.8).repeatForever(autoreverses: false),
+                 value: on)
+      .onAppear { if !reduceMotion { on = true } }
   }
 }
