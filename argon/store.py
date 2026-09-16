@@ -130,8 +130,15 @@ class Store:
         if external_id:
             existing = self.task_by_external(external_id)
             if existing is not None:
+                if existing.done:
+                    # The source still says he owes this, so a previous
+                    # closure was wrong. Without this a task closed by mistake
+                    # could never come back: the import matched the completed
+                    # row and only updated it.
+                    self.reopen_task(existing.id)
                 return self.update_task(existing.id, due=due or None,
-                                        title=title, subject=subject or None) or existing
+                                        title=title, subject=subject or None) \
+                    or self.task(existing.id) or existing
         tid = uuid.uuid4().hex[:12]
         with self._lock:
             self._db.execute(
@@ -204,6 +211,19 @@ class Store:
             self._db.commit()
             title = row["title"]
         self._t.append("task_done", id=tid, summary=title)
+        return self.task(tid)
+
+    def reopen_task(self, tid: str) -> Task | None:
+        """Undo a completion. Used when a source still reports work as owed."""
+        with self._lock:
+            row = self._db.execute("SELECT * FROM tasks WHERE id=? AND done=1",
+                                   (tid,)).fetchone()
+            if row is None:
+                return None
+            self._db.execute("UPDATE tasks SET done=0, done_at=NULL WHERE id=?", (tid,))
+            self._db.commit()
+            title = row["title"]
+        self._t.append("task_reopened", id=tid, summary=title)
         return self.task(tid)
 
     def update_task(self, tid: str, **changes: Any) -> Task | None:
@@ -339,6 +359,14 @@ def _selftest() -> None:
         assert again.id == first.id, "same assignment must not appear twice"
         assert s.task(first.id).due == "2026-09-13", "and its due date updates"
         assert list(s.external_ids(source="classroom")) == ["cw-17"]
+
+        # A task closed by mistake comes back when the source still owes it.
+        s.complete_task(first.id)
+        assert s.task(first.id).done is True
+        again2 = s.add_task("HW 17", source="classroom", external_id="cw-17",
+                            due="2026-09-13")
+        assert again2.done is False, "re-import must reopen a wrongly closed task"
+        assert "task_reopened" in [e.kind for e in t.window(2)]
 
         assert s.complete_task(a.id).done is True
         assert s.complete_task(a.id) is None, "completing twice is not an event"

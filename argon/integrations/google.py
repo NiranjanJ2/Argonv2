@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from typing import Any
 
@@ -441,12 +441,45 @@ def tidy_course(name: str) -> str:
     return cleaned or name
 
 
+def classroom_due(coursework: dict[str, Any]) -> datetime | None:
+    """Local due datetime of a courseWork item, or None if it has no deadline.
+
+    Taken from v1, which had this right and explains why:
+
+        Classroom reports ``dueDate``/``dueTime`` in **UTC**; reading them as
+        local time shifts every deadline by the UTC offset (an 11:59 PM
+        assignment lands on the following morning).
+
+    That is not hypothetical here. His Classroom returns
+    ``dueDate=2026-09-22, dueTime={'hours': 6, 'minutes': 59}`` for work due at
+    23:59 on the 21st — 06:59Z is 23:59 the previous day in Pacific. Reading
+    the date alone put **every dated assignment on his board a day late**.
+
+    With no ``dueTime`` there is no official instant; local end-of-day is only
+    a work-by fallback.
+    """
+    due_date = coursework.get("dueDate")
+    if not due_date:
+        return None
+    due_time = coursework.get("dueTime")
+    try:
+        if due_time is None:
+            return datetime(due_date["year"], due_date["month"], due_date["day"],
+                            23, 59, tzinfo=clock.TZ)
+        return datetime(
+            due_date["year"], due_date["month"], due_date["day"],
+            due_time.get("hours", 0), due_time.get("minutes", 0),
+            due_time.get("seconds", 0), due_time.get("nanos", 0) // 1000,
+            tzinfo=UTC,
+        ).astimezone(clock.TZ)
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 def _due_key(work: dict[str, Any]) -> tuple:
-    """Sort by due date, undated last — the order he reads them in."""
-    due = work.get("dueDate") or {}
-    if not due.get("year"):
-        return (1, "")
-    return (0, f"{due['year']}-{due['month']:02d}-{due['day']:02d}")
+    """Sort by local due date, undated last — the order he reads them in."""
+    due = classroom_due(work)
+    return (1, "") if due is None else (0, due.strftime("%Y-%m-%d"))
 
 
 def search_mail(account: str, query: str, limit: int = 5) -> str:
@@ -560,6 +593,24 @@ def _selftest() -> None:
         # about Classroom, and both are easy to lose by accident.
         assert DAYS_BACK >= 7, "overdue work is the point of the board"
         assert REQUIRE_DUE_DATE, "undated handouts are a notice board, not homework"
+
+        # The UTC bug that put every dated assignment a day late. 06:59Z is
+        # 23:59 Pacific the previous day, which is the Classroom default.
+        late = {"dueDate": {"year": 2026, "month": 9, "day": 22},
+                "dueTime": {"hours": 6, "minutes": 59}}
+        assert classroom_due(late).strftime("%Y-%m-%d %H:%M") == "2026-09-21 23:59"
+        assert _due_key(late) == (0, "2026-09-21")
+
+        # A real daytime deadline survives unshifted.
+        noonish = {"dueDate": {"year": 2026, "month": 9, "day": 1},
+                   "dueTime": {"hours": 16, "minutes": 30}}
+        assert classroom_due(noonish).strftime("%Y-%m-%d %H:%M") == "2026-09-01 09:30"
+
+        # No dueTime means no official instant; end of the stated local day.
+        assert classroom_due({"dueDate": {"year": 2026, "month": 9, "day": 5}}
+                             ).strftime("%Y-%m-%d %H:%M") == "2026-09-05 23:59"
+        assert classroom_due({}) is None
+        assert classroom_due({"dueDate": {"year": 2026}}) is None
         # The documented alternate scope still satisfies it.
         write_token("alt", EQUIVALENT["classroom"])
         assert can("alt", "classroom")

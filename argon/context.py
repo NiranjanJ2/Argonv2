@@ -122,6 +122,7 @@ def _tail(sealed: list[Event], loose: list[Event], extra: str = "") -> dict[str,
     lines = [f"It is now {now.strftime('%A %d %b, %H:%M')}."]
 
     spoke = next((e for e in reversed(sealed) if e.kind == "message_out"), None)
+    heard = next((e for e in reversed((*sealed, *loose)) if e.kind == "message_in"), None)
     if spoke is None:
         lines.append("You have not said anything to him yet.")
     else:
@@ -144,14 +145,26 @@ def _tail(sealed: list[Event], loose: list[Event], extra: str = "") -> dict[str,
         replied = any(e.kind == "message_in" and e.seq > spoke_seq
                       for e in (*sealed, *loose))
         lines.append("He has replied since." if replied else "He has not replied since.")
-        if mins < 30 and not replied:
-            # Quoting it back and naming the consequence, because the bare
-            # elapsed time was not enough: two messages went out seventeen
-            # seconds apart with the first one visible in context.
+        # Counted, not cliffed. A `mins < 30` threshold produced repeats at 31
+        # and 36 minutes — which is the shape a soft threshold always produces,
+        # because the model waits it out. A count does not expire.
+        today = clock.day_key()
+        sent_today = sum(1 for e in (*sealed, *loose)
+                         if e.kind == "message_out" and e.day == today)
+        heard_today = sum(1 for e in (*sealed, *loose)
+                          if e.kind == "message_in" and e.day == today)
+        lines.append(f"Today you have sent him {sent_today} message(s); "
+                     f"he has sent you {heard_today}.")
+        if heard is not None:
+            gap = int((now - datetime.fromisoformat(heard.at)).total_seconds() // 60)
+            ago = f"{gap // 60}h {gap % 60}m" if gap >= 60 else f"{gap}m"
+            lines.append(f"He last said, {ago} ago: "
+                         f"\"{str(heard.payload.get('text', ''))[:160]}\"")
+        if sent_today >= 3 and heard_today == 0:
             lines.append(
-                "You spoke very recently and he has not answered. Saying "
-                "substantially the same thing again is how you get muted. "
-                "Stay quiet unless something has genuinely changed since then."
+                "He has not answered any of them. Every further message today "
+                "makes the next one less likely to be read. Stay quiet unless "
+                "something has genuinely changed that he can act on now."
             )
         if not replied and str(spoke.payload.get("text", "")).rstrip().endswith("?"):
             # Silence is an answer. It asked "which meeting?" at 18:58, was not

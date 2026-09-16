@@ -230,15 +230,29 @@ class Runtime:
                                 due=item["due"] or "", source="classroom",
                                 external_id=item["id"])
 
-        # Anything he no longer owes is done, however he did it.
+        # Anything he no longer owes is done, however he did it — but only
+        # when every course answered.
+        #
+        # Absence from a partial read is not evidence of completion. Four of
+        # his Robotics courses return 403, and closing on that basis marked
+        # their homework done permanently: `add_task` matches the completed row
+        # and updates it, so the work never came back and the board said
+        # "done". Losing work silently is the failure this guard exists to
+        # prevent — v1 had the same rule and the same reason.
         closed = 0
-        for external_id, task in known.items():
-            if external_id not in seen:
-                if self.store.complete_task(task.id):
-                    closed += 1
+        if refused:
+            note_suffix = (f"; kept {len(known) - len(seen & known.keys())} open "
+                           f"because {len(refused)} course(s) could not be read")
+        else:
+            note_suffix = ""
+            for external_id, task in known.items():
+                if external_id not in seen:
+                    if self.store.complete_task(task.id):
+                        closed += 1
 
         self._last_classroom_sync = clock.now()
         note = f"classroom: {added} added, {closed} closed, {len(items)} outstanding"
+        note += note_suffix
         if refused:
             note += f" (could not read: {', '.join(refused)})"
         self.transcript.append("classroom_sync", summary=note)
@@ -349,7 +363,7 @@ class Runtime:
 
         t.add("calendar", "His calendar for the next few days.",
               lambda days=7: route("calendar", google.list_events, days),
-              params={"days": {"type": "integer"}})
+              params={"days": {"type": "integer"}}, untrusted=True)
         t.add("add_event", "Put something on his calendar.",
               lambda title, start, end="":
                   route("calendar", google.create_event, title, start, end),
@@ -358,10 +372,11 @@ class Runtime:
                       "end": {"type": "string"}},
               required=["title", "start"])
         t.add("assignments", "Outstanding Google Classroom work.",
-              lambda: route("classroom", google.list_assignments))
+              lambda: route("classroom", google.list_assignments), untrusted=True)
         t.add("search_mail", "Search his mail.",
               lambda query: route("gmail", google.search_mail, query),
-              params={"query": {"type": "string"}}, required=["query"])
+              params={"query": {"type": "string"}}, required=["query"],
+              untrusted=True)
 
         def stand_down(hours: float = 12, reason: str = "") -> str:
             if not 0.25 <= hours <= 48:
