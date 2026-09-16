@@ -186,9 +186,15 @@ def _credentials(account: str):
 
 @lru_cache(maxsize=32)
 def _service(account: str, api: str, version: str):
+    # Credentials first, import second. Reversed, a box without the client
+    # libraries reports "No module named 'googleapiclient'" for an account that
+    # was simply never connected — which sends you installing packages that are
+    # already fine. _credentials raises the message that actually helps.
+    creds = _credentials(account)
+
     from googleapiclient.discovery import build
 
-    return build(api, version, credentials=_credentials(account),
+    return build(api, version, credentials=creds,
                  cache_discovery=False, static_discovery=True)
 
 
@@ -434,6 +440,69 @@ def outstanding_assignments(account: str, days_back: int = DAYS_BACK,
                         "course": tidy_course(name), "due": due, "courseId": cid})
     out.sort(key=lambda a: a["due"])
     return out, refused
+
+
+#: How far back to read posted material. A teacher posts the day's work in the
+#: morning; by the third day it is no longer "what to do tonight".
+MATERIAL_DAYS_BACK = 3
+
+
+def recent_materials(account: str, days_back: int = MATERIAL_DAYS_BACK,
+                     limit: int = 12) -> list[dict[str, Any]]:
+    """Recently posted material and announcements, as context rather than tasks.
+
+    Not every class assigns work as an *assignment*. AP Lang posts the day's
+    reading as a ``courseWorkMaterial`` and some teachers just write an
+    announcement. Neither has a studentSubmission, so ``outstanding_assignments``
+    skips the course entirely and the class reads as having no homework — which
+    is the single worst thing this board can say, because he believes it.
+
+    These come back as context lines, never as tasks, and the distinction is
+    forced by the data: a material has no due date and no submission state, so
+    there is nothing that can ever mark it done. Made into tasks they would
+    pile up unfinishable forever. Stated as context the model can see "AP Lang
+    posted X today" and ask him about it, or call add_task if it is real work.
+    """
+    svc = _service(account, "classroom", "v1")
+    courses = {c["id"]: c.get("name", "?")
+               for c in svc.courses().list(
+                   courseStates=["ACTIVE"]).execute().get("courses", [])}
+    floor = clock.now() - timedelta(days=days_back)
+
+    out: list[dict[str, Any]] = []
+    for cid, name in courses.items():
+        for kind, call, state_arg, key, titler in (
+            ("material", svc.courses().courseWorkMaterials(),
+             "courseWorkMaterialStates", "courseWorkMaterial",
+             lambda i: i.get("title") or "(untitled)"),
+            ("announcement", svc.courses().announcements(),
+             "announcementStates", "announcements",
+             lambda i: " ".join((i.get("text") or "").split())[:120] or "(empty)"),
+        ):
+            try:
+                page = call.list(**{"courseId": cid, state_arg: ["PUBLISHED"],
+                                    "pageSize": 20}).execute()
+            except Exception:  # noqa: BLE001 - a locked course must not stop the rest
+                continue
+            for item in page.get(key, []):
+                at = _parse_rfc3339(item.get("updateTime") or item.get("creationTime"))
+                if at is None or at < floor:
+                    continue
+                out.append({"course": tidy_course(name), "kind": kind,
+                            "title": titler(item), "at": at})
+    out.sort(key=lambda m: m["at"], reverse=True)
+    return out[:limit]
+
+
+def _parse_rfc3339(value: str | None) -> datetime | None:
+    """Classroom timestamps, in local time. Returns None rather than raising:
+    a malformed timestamp on one post must not blank the whole feed."""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone()
+    except ValueError:
+        return None
 
 
 def list_assignments(account: str, limit: int = 30, days_back: int = DAYS_BACK) -> str:

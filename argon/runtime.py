@@ -69,6 +69,8 @@ class Runtime:
         self._last_classroom_sync: datetime | None = None
         self._agenda_cache: list[str] = []
         self._agenda_at: datetime | None = None
+        self._posted_cache: list[str] = []
+        self._posted_at: datetime | None = None
         self._channels: list = []
         self._stop = threading.Event()
         # One turn at a time. The Flask thread, the tick loop and the Discord
@@ -100,6 +102,8 @@ class Runtime:
             parts.append("What you know:\n" + "\n".join(f"- {f}" for f in facts[:25]))
         if (agenda := self._agenda()):
             parts.append(agenda)
+        if (posted := self._posted()):
+            parts.append(posted)
         period = bell.current_period()
         if period:
             parts.append(f"He is in {period} right now.")
@@ -153,6 +157,35 @@ class Runtime:
         if not self._agenda_cache:
             return ""
         return "Left on his calendar today:\n" + "\n".join(self._agenda_cache)
+
+    def _posted(self) -> str:
+        """What his teachers posted that is not an assignment.
+
+        Same lesson as _agenda: state it, do not hope for a tool call. A class
+        whose work arrives as a posted material contributes nothing to the task
+        board, so without this the model says "nothing due for AP Lang" with
+        total confidence and he believes it.
+
+        Labelled "not tracked as tasks" on purpose. These have no submission
+        state, so nothing can ever mark them done — if the model treats them as
+        board items it will nag about the same reading for weeks.
+        """
+        now = clock.now()
+        if (self._posted_at is None
+                or (now - self._posted_at).total_seconds() > AGENDA_TTL_MINUTES * 60):
+            account = google.account_for("classroom", self.cfg.google_accounts)
+            try:
+                items = google.recent_materials(account) if account else []
+            except Exception as e:  # noqa: BLE001 - a bad read must not stop the turn
+                self.transcript.append("materials_failed", summary=repr(e)[:200])
+                items = []
+            self._posted_cache, self._posted_at = ([
+                f"- {m['at']:%a} {m['course']}: {m['title']}" for m in items], now)
+        if not self._posted_cache:
+            return ""
+        return ("Recently posted by his teachers (not tracked as tasks, and "
+                "nothing here can be marked done):\n"
+                + "\n".join(self._posted_cache))
 
     def turn(self, *, background: bool) -> object:
         """One turn with live state attached. Every entry point — tick, chat,

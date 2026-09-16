@@ -97,6 +97,10 @@ def _write(data: dict) -> None:
     target = _file()
     tmp = target.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(data, indent=2, sort_keys=True))
+    # Chmod the temp file, not the target: os.replace swaps the *inode*, so a
+    # mode set on the old file is discarded by the very next write and the
+    # permissions silently revert to whatever the umask gives (0644 here).
+    os.chmod(tmp, 0o600)
     os.replace(tmp, target)
 
 

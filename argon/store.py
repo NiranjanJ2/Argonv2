@@ -17,7 +17,7 @@ import re
 import sqlite3
 import threading
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -59,6 +59,11 @@ CREATE TABLE IF NOT EXISTS facts (
 """
 
 
+#: How long a start stays current. From a 16:00 start this expires at 04:00,
+#: so an evening session survives midnight and nothing survives to the next day.
+STARTED_TTL = timedelta(hours=12)
+
+
 @dataclass(frozen=True)
 class Task:
     id: str
@@ -73,7 +78,27 @@ class Task:
 
     @property
     def started(self) -> bool:
-        return self.started_at is not None
+        """Whether he is *currently* on this, not whether he ever began it.
+
+        Nothing ever clears started_at: he starts an essay Monday at 16:00,
+        gets pulled away, and on Thursday the board still says "working on it"
+        and /v1/status still reports mode=working. The agent then builds a whole
+        turn around a session that ended three days ago.
+
+        A rolling window rather than a calendar day because he does homework at
+        23:40 and midnight must not end the session under him.
+
+        ponytail: a fixed window, not a real session with an end event. Add
+        stop_task if he ever wants paused/resumed distinguished from stale.
+        """
+        if self.started_at is None:
+            return False
+        try:
+            began = datetime.fromisoformat(self.started_at)
+        except ValueError:
+            return False
+        return (clock.now() - began) < STARTED_TTL
+
 
     def line(self) -> str:
         """One line for the prompt and the board.
@@ -440,6 +465,14 @@ def _selftest() -> None:
         assert s.start_task(b.id).started is True
         assert s.start_task(b.id) is None, "starting twice is not an event"
         assert s.tasks()[0].started_at is not None or s.find_task("Read Ch 3").started
+
+        # A start goes stale. Without this the board says "working on it" days
+        # later, because nothing ever clears started_at.
+        stale = replace(s.task(b.id),
+                        started_at=(clock.now() - STARTED_TTL
+                                    - timedelta(minutes=1)).isoformat())
+        assert stale.started_at is not None
+        assert stale.started is False, "a start from yesterday still reads as current"
 
         s.remember("practice Tuesdays", standing=True)
         s.remember("lab meeting moved", until="2026-09-01")   # expired
