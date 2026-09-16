@@ -124,6 +124,14 @@ and the data root holds nothing executable.
 - **Google refresh tokens die every 7 days** while the OAuth consent screen is
   in *Testing*. Google policy; no code fixes it. Publish the app. If every
   account fails `invalid_grant` at once, that is what happened.
+- **A Classroom 403 is usually not a scope.** `courseWork().list()` without
+  `courseWorkStates=["PUBLISHED"]` also asks for DRAFT work, which a student
+  may not see, and the whole call returns "The caller does not have
+  permission". Two wrong diagnoses came out of that before the real one: the
+  grant was fine all along.
+- **Accounts are role-specialised.** `work` holds calendar and tasks, `school`
+  holds Classroom, `personal` holds almost nothing. Tools resolve the account
+  that can serve them; never assume one account can do everything.
 - **An APNs key scoped to Development at creation can never be widened.**
   Production then fails on auth before reading the device token, which looks
   exactly like a dead registration. `argon doctor` probes both environments

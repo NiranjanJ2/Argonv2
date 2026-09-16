@@ -9,7 +9,15 @@ extensions) and runs the sync tests. All green.
 
 ## What still needs you
 
-**1. An app icon.** `Assets.xcassets/AppIcon` is empty. Drop a 1024×1024 PNG in.
+**1. TestFlight needs a distribution certificate.** The keychain has only an
+Apple *Development* identity; App Store provisioning profiles for all five
+bundle IDs are installed and valid to Aug 2027, but nothing can sign against
+them. Xcode → Settings → Accounts → Manage Certificates → + → Apple
+Distribution. An App Store Connect API key at
+`~/.appstoreconnect/private_keys/AuthKey_<KeyID>.p8` then makes the upload
+scriptable.
+
+The icon is done — `argon-icon.appiconset`, 1024×1024, no alpha.
 
 **2. Signing, to run it on your phone.** The project signs
 `com.niranjanj.argon` / team `DX3U2FC8X5`; builds here were `CODE_SIGNING_ALLOWED=NO`,
@@ -17,8 +25,8 @@ which verifies compilation but not provisioning.
 
 **3. Server and token, in the app's Settings tab.** Address is
 `http://192.168.68.72:3997`, token is in `~/.argon2/config.json` → `api.token`.
-Nothing is hardcoded and no credential is in source. **This needs `ufw` open on
-3997** or the phone cannot reach it off-tunnel.
+Nothing is hardcoded and no credential is in source. `ufw` is already open on
+3997.
 
 **4. Tests need a simulator.** None are installed, so `xcodebuild test` could
 not run — only the build. Install one if you want `foqosTests` exercised.
