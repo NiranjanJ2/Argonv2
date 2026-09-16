@@ -31,22 +31,52 @@ from argon import clock, config
 #: account returns "insufficient authentication scopes", which reads like a
 #: broken grant rather than a misrouted call.
 #: The scope each capability needs for the call it actually makes — not the
-#: scope that merely sounds related. `classroom` used to be keyed on
-#: `courses.readonly`, which his school account has, while `list_assignments`
-#: calls `courseWork().list()`, which needs `coursework.me.readonly`, which it
-#: does not. Routing said yes and every call came back 403, so Argon spent an
-#: evening telling him Classroom was broken.
+#: scope that merely sounds related.
+#:
+#: `classroom` is keyed on `student-submissions.me.readonly`, which is what
+#: actually lets `courses().courseWork().list()` read the work for courses he is
+#: a student in. Two wrong guesses preceded it: `courses.readonly` alone, which
+#: he holds and which 403s on coursework; then `coursework.me.readonly`, which
+#: is genuinely sufficient but which he does not hold — and requiring it
+#: declared a working grant broken. v1 read assignments with exactly the scopes
+#: below, which is the evidence that settles it.
 CAPABILITIES: dict[str, str] = {
     "calendar": "https://www.googleapis.com/auth/calendar",
     "tasks": "https://www.googleapis.com/auth/tasks",
-    "classroom": "https://www.googleapis.com/auth/classroom.coursework.me.readonly",
+    "classroom": "https://www.googleapis.com/auth/classroom.student-submissions.me.readonly",
     "gmail": "https://www.googleapis.com/auth/gmail.readonly",
     "drive": "https://www.googleapis.com/auth/drive.readonly",
 }
 
 #: Alternates that also satisfy a capability.
 EQUIVALENT: dict[str, list[str]] = {
-    "classroom": ["https://www.googleapis.com/auth/classroom.coursework.me"],
+    "classroom": [
+        "https://www.googleapis.com/auth/classroom.coursework.me.readonly",
+        "https://www.googleapis.com/auth/classroom.coursework.me",
+    ],
+}
+
+#: Requested when authorising a new account, per account, because they are
+#: role-specialised. Mirrors what v1 asked for — these grants demonstrably work.
+ACCOUNT_SCOPES: dict[str, list[str]] = {
+    "personal": ["https://www.googleapis.com/auth/drive.readonly"],
+    "work": [
+        "https://www.googleapis.com/auth/calendar",
+        "https://www.googleapis.com/auth/tasks",
+        "https://www.googleapis.com/auth/drive.readonly",
+        "https://www.googleapis.com/auth/gmail.readonly",
+    ],
+    "school": [
+        "https://www.googleapis.com/auth/classroom.courses.readonly",
+        "https://www.googleapis.com/auth/classroom.student-submissions.me.readonly",
+        "https://www.googleapis.com/auth/classroom.announcements.readonly",
+        # Some teachers post the work as a Material rather than an assignment.
+        # Without this scope those classes look like they have no homework.
+        "https://www.googleapis.com/auth/classroom.courseworkmaterials.readonly",
+        "https://www.googleapis.com/auth/classroom.rosters.readonly",
+        "https://www.googleapis.com/auth/drive.readonly",
+        "https://www.googleapis.com/auth/gmail.readonly",
+    ],
 }
 
 #: Requested when authorising a *new* account. Existing grants are never
@@ -168,7 +198,8 @@ def authorise(account: str, port: int = 8765) -> str:
 
     if not client_secret_path().exists():
         raise GoogleUnavailable(f"put the OAuth client secret at {client_secret_path()}")
-    flow = InstalledAppFlow.from_client_secrets_file(str(client_secret_path()), SCOPES)
+    wanted = ACCOUNT_SCOPES.get(account, SCOPES)
+    flow = InstalledAppFlow.from_client_secrets_file(str(client_secret_path()), wanted)
     creds = flow.run_local_server(port=port, open_browser=False)
     token_path(account).write_text(creds.to_json())
     _service.cache_clear()
@@ -369,11 +400,14 @@ def _selftest() -> None:
         assert account_for("drive", accounts) == "personal", "first match wins"
         assert account_for("gmail", accounts) == "work", "order decides ties"
         assert account_for("nothing_like_this", accounts) is None
-        # courses.readonly must not pass for classroom: that is the exact
-        # mismatch that produced an evening of 403s.
-        assert not can("halfschool", "classroom")
-        assert account_for("classroom", ["halfschool"]) is None
-        assert missing_scope("classroom") == "classroom.coursework.me.readonly"
+        # courses.readonly alone must not pass for classroom — that mismatch
+        # produced an evening of 403s. But his real school grant, which has
+        # student-submissions, must pass: v1 read assignments with exactly it.
+        write_token("coursesonly", ["https://www.googleapis.com/auth/classroom.courses.readonly"])
+        assert not can("coursesonly", "classroom")
+        assert can("halfschool", "classroom"), "the grant v1 used must be accepted"
+        assert account_for("classroom", ["halfschool"]) == "halfschool"
+        assert missing_scope("classroom") == "classroom.student-submissions.me.readonly"
         # The documented alternate scope still satisfies it.
         write_token("alt", EQUIVALENT["classroom"])
         assert can("alt", "classroom")
