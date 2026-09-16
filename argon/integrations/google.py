@@ -490,7 +490,11 @@ def recent_materials(account: str, days_back: int = MATERIAL_DAYS_BACK,
                     continue
                 out.append({"course": tidy_course(name), "kind": kind,
                             "title": titler(item), "at": at})
-    out.sort(key=lambda m: m["at"], reverse=True)
+    # Materials first, then recency. A material is a teacher posting the day's
+    # actual work; an announcement is usually a club or the counselling office.
+    # Sorted by recency alone, one busy day of "PSAT registration!" pushes AP
+    # Lang's "WEEK 6 - TUES" out of the cap — losing the only reason this exists.
+    out.sort(key=lambda m: (m["kind"] != "material", -m["at"].timestamp()))
     return out[:limit]
 
 
