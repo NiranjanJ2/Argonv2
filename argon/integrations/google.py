@@ -309,23 +309,59 @@ def create_event(account: str, title: str, start: str, end: str = "") -> str:
 #: Submission states meaning he still owes the work.
 OUTSTANDING = ["CREATED", "RECLAIMED_BY_STUDENT"]
 
-#: How far back a due date can be and still be worth showing. His Classroom
-#: goes back to 2022 and nobody is doing the 2022 counselling form; sorting by
-#: due date ascending and taking the first thirty returns exactly that.
-STALE_AFTER_DAYS = 21
+#: The board is a window around now, not everything ever assigned.
+#:
+#: Taken from v1, which got this right. The window used to open at *now*, so an
+#: assignment stopped existing the moment it came due — Chapter 5 Key Terms was
+#: on the board all of 09/09 and gone by 00:01 on 09/10, and Argon ended up
+#: telling him it had never been posted. Overdue work is the most important
+#: thing a board can show, so it reaches backwards.
+DAYS_BACK = 14
+DAYS_AHEAD = 30
+
+#: Undated coursework is excluded, also from v1.
+#:
+#: Teachers post handouts, reminders and readings as assignments. There is
+#: nothing to turn in, so Classroom reports them outstanding forever — fifty
+#: nine items, most of which he was never going to "complete". Anything with a
+#: real deadline is real work; anything without one is a notice board.
+REQUIRE_DUE_DATE = True
 
 
-def outstanding_assignments(account: str, days_back: int = STALE_AFTER_DAYS
+def _all_coursework(svc, course_id: str) -> list[dict[str, Any]]:
+    """Every published item in a course, paged.
+
+    Paged because a single page silently truncates a busy course, and a class
+    missing from the board is the failure that actually costs him.
+    """
+    items: list[dict[str, Any]] = []
+    token: str | None = None
+    while True:
+        kwargs: dict[str, Any] = {"courseId": course_id,
+                                  "courseWorkStates": ["PUBLISHED"], "pageSize": 50}
+        if token:
+            kwargs["pageToken"] = token
+        page = svc.courses().courseWork().list(**kwargs).execute()
+        items.extend(page.get("courseWork", []))
+        token = page.get("nextPageToken")
+        if not token:
+            return items
+
+
+def outstanding_assignments(account: str, days_back: int = DAYS_BACK,
+                            days_ahead: int = DAYS_AHEAD
                             ) -> tuple[list[dict[str, Any]], list[str]]:
-    """Work he still owes, as records rather than prose.
+    """Work he still owes, inside the window, as records rather than prose.
 
-    ``list_assignments`` renders these for the model; the task board needs the
-    fields, so both call this. Returns (assignments, courses that refused).
+    ``list_assignments`` renders these for the model and the task board takes
+    the fields, so both call this and cannot disagree. Returns (assignments,
+    courses that could not be read).
     """
     svc = _service(account, "classroom", "v1")
     courses = {c["id"]: c.get("name", "?")
                for c in svc.courses().list(courseStates=["ACTIVE"]).execute().get("courses", [])}
-    cutoff = (clock.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
+    floor = (clock.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
+    ceiling = (clock.now() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
 
     out: list[dict[str, Any]] = []
     refused: list[str] = []
@@ -339,26 +375,27 @@ def outstanding_assignments(account: str, days_back: int = STALE_AFTER_DAYS
             }
             if not owed:
                 continue
-            work = svc.courses().courseWork().list(
-                courseId=cid, courseWorkStates=["PUBLISHED"],
-                orderBy="dueDate desc", pageSize=100).execute()
+            work = _all_coursework(svc, cid)
         except Exception as e:  # noqa: BLE001
-            refused.append(f"{name} ({type(e).__name__})")
+            # One locked-down course must not blank out the others.
+            refused.append(f"{tidy_course(name)} ({type(e).__name__})")
             continue
 
-        for cw in work.get("courseWork", []):
+        for cw in work:
             if cw.get("id") not in owed:
                 continue
             _, due = _due_key(cw)
-            if due and due < cutoff:
+            if REQUIRE_DUE_DATE and not due:
+                continue
+            if not (floor <= due <= ceiling):
                 continue
             out.append({"id": cw["id"], "title": cw.get("title") or "(untitled)",
                         "course": tidy_course(name), "due": due, "courseId": cid})
-    out.sort(key=lambda a: (a["due"] == "", a["due"]))
+    out.sort(key=lambda a: a["due"])
     return out, refused
 
 
-def list_assignments(account: str, limit: int = 30, days_back: int = STALE_AFTER_DAYS) -> str:
+def list_assignments(account: str, limit: int = 30, days_back: int = DAYS_BACK) -> str:
     """What he still owes, across his active courses.
 
     Two things this asks for that the obvious version does not:
@@ -518,6 +555,11 @@ def _selftest() -> None:
         assert tidy_course("Artif Intell H-Johnson(2026-2027)") == "Artif Intell"
         assert tidy_course("Math Analysis/Calc A H-Machado(26-27)") == "Math Analysis/Calc A"
         assert tidy_course("") == ""
+
+        # The window and the due-date rule are the two things v1 got right
+        # about Classroom, and both are easy to lose by accident.
+        assert DAYS_BACK >= 7, "overdue work is the point of the board"
+        assert REQUIRE_DUE_DATE, "undated handouts are a notice board, not homework"
         # The documented alternate scope still satisfies it.
         write_token("alt", EQUIVALENT["classroom"])
         assert can("alt", "classroom")
