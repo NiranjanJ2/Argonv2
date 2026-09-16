@@ -36,6 +36,16 @@ final class ArgonAppDelegate: NSObject, UIApplicationDelegate {
     UserDefaults.standard.string(forKey: "argon.token") ?? ""
   }
 
+  /// Ask for notifications the first time he opens the conversation, not at
+  /// launch. A permission prompt over an empty screen, before the app has
+  /// shown him anything, is the reliable way to be told no — and it is the
+  /// one permission Argon genuinely needs, since the brief arrives by push.
+  func requestPushIfNeeded() async {
+    guard !UserDefaults.standard.bool(forKey: "argon.askedForPush") else { return }
+    UserDefaults.standard.set(true, forKey: "argon.askedForPush")
+    await push.requestAuthorisation()
+  }
+
   func reconfigure() async {
     await client.configure(base: Self.baseURL, token: Self.token)
   }
@@ -49,10 +59,7 @@ final class ArgonAppDelegate: NSObject, UIApplicationDelegate {
       guard let task = task as? BGAppRefreshTask else { return }
       Task { @MainActor in self.handle(task) }
     }
-    Task {
-      await push.requestAuthorisation()
-      await store.refresh()
-    }
+    Task { await store.refresh() }
     return true
   }
 

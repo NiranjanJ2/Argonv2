@@ -37,5 +37,16 @@ struct ArgonRootView: View {
     .onChange(of: phase) { _, new in
       if new == .active { Task { await store.refresh() } }
     }
+    // Ask for notifications when he actually opens the conversation, not at
+    // launch. A prompt over an empty screen, before the app has shown him
+    // anything, is the reliable way to be told no — and this is the one
+    // permission Argon needs, because the brief arrives by push.
+    //
+    // On tab *selection* rather than in the chat view's .task: SwiftUI runs
+    // .task for tabs that are not on screen, so that fired at launch anyway.
+    .onChange(of: tab) { _, new in
+      guard new == .chat else { return }
+      Task { await ArgonAppDelegate.shared.requestPushIfNeeded() }
+    }
   }
 }

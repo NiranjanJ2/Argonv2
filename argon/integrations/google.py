@@ -389,12 +389,18 @@ def list_assignments(account: str, limit: int = 30, days_back: int = STALE_AFTER
 #: H-Machado(26-27)" wraps to two lines on a phone and the year tells him
 #: nothing he does not know.
 _YEAR_SUFFIX = re.compile(
-    r"\s*[\(\[]?\s*'?\d{2}\s*[-/–]\s*'?\d{2}\s*[\)\]]?\s*$")
+    r"\s*[\(\[]?\s*'?\d{2}(?:\d{2})?\s*[-/–]\s*'?\d{2}(?:\d{2})?\s*[\)\]]?\s*$")
+
+#: Teachers append their own name: "Artif Intell H-Johnson", "Math Analysis/
+#: Calc A H-Machado". He knows who teaches his classes; on a phone row it just
+#: pushes the subject out of view.
+_TEACHER_SUFFIX = re.compile(r"\s+[A-Z]-[A-Z][a-z]+\s*$")
 
 
 def tidy_course(name: str) -> str:
     """Strip the year off a Classroom course name."""
     cleaned = _YEAR_SUFFIX.sub("", name or "").strip(" -–—")
+    cleaned = _TEACHER_SUFFIX.sub("", cleaned).strip(" -–—")
     return cleaned or name
 
 
@@ -505,11 +511,12 @@ def _selftest() -> None:
         assert missing_scope("classroom") == "classroom.student-submissions.me.readonly"
 
         # Course names lose the year; everything else survives intact.
-        assert tidy_course("Math Analysis/Calc A H-Machado(26-27)") == "Math Analysis/Calc A H-Machado"
         assert tidy_course("WHS Robotics Cabinet 26/27") == "WHS Robotics Cabinet"
         assert tidy_course("Kokoro Kara '26-'27") == "Kokoro Kara"
         assert tidy_course("APUSH PM") == "APUSH PM"
         assert tidy_course("Japanese 4 & AP") == "Japanese 4 & AP"
+        assert tidy_course("Artif Intell H-Johnson(2026-2027)") == "Artif Intell"
+        assert tidy_course("Math Analysis/Calc A H-Machado(26-27)") == "Math Analysis/Calc A"
         assert tidy_course("") == ""
         # The documented alternate scope still satisfies it.
         write_token("alt", EQUIVALENT["classroom"])
