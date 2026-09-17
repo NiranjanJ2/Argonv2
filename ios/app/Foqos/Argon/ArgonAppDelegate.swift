@@ -48,6 +48,9 @@ final class ArgonAppDelegate: NSObject, UIApplicationDelegate {
 
   func reconfigure() async {
     await client.configure(base: Self.baseURL, token: Self.token)
+    // Settings just changed the address or the token, which is exactly when a
+    // registration that failed against the old one can finally succeed.
+    await push.syncToken()
   }
 
   func application(
@@ -80,6 +83,7 @@ final class ArgonAppDelegate: NSObject, UIApplicationDelegate {
     scheduleRefresh()   // chain the next one before doing any work
     let work = Task {
       await store.refresh()
+      await push.syncToken()   // cheap no-op once the server has the token
       task.setTaskCompleted(success: true)
     }
     task.expirationHandler = {

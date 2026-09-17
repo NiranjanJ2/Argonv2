@@ -35,7 +35,32 @@ final class ArgonPush: NSObject, UNUserNotificationCenterDelegate {
   func registered(deviceToken: Data) {
     let hex = deviceToken.map { String(format: "%02x", $0) }.joined()
     UserDefaults.standard.set(hex, forKey: "argon.deviceToken")
-    Task { try? await client.register(deviceToken: hex) }
+    UserDefaults.standard.set(false, forKey: Self.syncedKey)
+    Task { await syncToken() }
+  }
+
+  private static let tokenKey = "argon.deviceToken"
+  private static let syncedKey = "argon.deviceTokenSynced"
+
+  /// Push the stored token to the server until it actually lands.
+  ///
+  /// iOS hands the token to the app once per launch. The old code posted it
+  /// with `try?` and dropped the error, so one failed POST — server asleep,
+  /// wrong token in Settings, phone on cellular off the LAN — meant the server
+  /// held no device and every brief afterwards logged "no device registered
+  /// for push" until the next cold launch. The failure was invisible from both
+  /// ends. Now the token is only marked synced when the server takes it, and
+  /// anything that wakes the app retries.
+  func syncToken() async {
+    guard !UserDefaults.standard.bool(forKey: Self.syncedKey),
+          let hex = UserDefaults.standard.string(forKey: Self.tokenKey),
+          !hex.isEmpty else { return }
+    do {
+      try await client.register(deviceToken: hex)
+      UserDefaults.standard.set(true, forKey: Self.syncedKey)
+    } catch {
+      print("[argon] device registration deferred: \(error.localizedDescription)")
+    }
   }
 
   func registrationFailed(_ error: Error) {
