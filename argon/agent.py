@@ -181,6 +181,13 @@ class Agent:
         is consecutive sends since his last word, so one reply reopens the
         channel immediately.
         """
+        # STOOD DOWN 16 Sep. A flat time backoff makes urgency a function of
+        # how long since the last message, which it is not: "All Project Sync
+        # starts in 15 minutes" is worth interrupting for whether or not a
+        # nudge went out ten minutes ago. Being replaced by a deadline bypass
+        # the server can verify — until then this must not swallow anything.
+        return None
+
         today = clock.day_key()
         unanswered, last_out = 0, None
         for e in reversed(self.t.window(2)):
@@ -363,9 +370,10 @@ def _selftest() -> None:
     a2.deliver = lambda text: []
     a2._background, a2._went_quiet = True, False
     assert a2.say("first") == "sent"
-    assert a2.say("second").startswith("Error"), "a second unprompted send must wait"
-    t2.append("message_in", text="ok")
-    assert a2.say("third") == "sent", "his reply reopens the channel"
+    # The flat backoff is stood down: it could swallow a message about an event
+    # starting in fifteen minutes. Re-enable this assertion with the deadline
+    # bypass, which gates on what the message is about rather than the clock.
+    assert a2.say("second") == "sent"
 
     # Going quiet is the action; announcing it is not going quiet.
     a2._went_quiet = True
