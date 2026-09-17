@@ -41,6 +41,11 @@ BOARD_LIMIT = 25
 #: How long the agenda is reused before the calendar is asked again.
 AGENDA_TTL_MINUTES = 10
 
+#: How close a calendar event has to be before it may interrupt. Long enough
+#: that he can still act on it — a warning that arrives as the thing starts is
+#: not a warning — and short enough that it is not just the day's agenda.
+EVENT_URGENT_MINUTES = 30
+
 
 def system_prompt() -> str:
     """Static for the whole day, so it caches.
@@ -65,9 +70,11 @@ class Runtime:
         self.agent = Agent(self.cfg, self.transcript, self.store, self.tools,
                            system_prompt())
         self.agent.deliver = self.deliver
+        self.agent.urgent_now = self.urgent_now
         self._prompt_day = clock.day_key()
         self._last_classroom_sync: datetime | None = None
         self._agenda_cache: list[str] = []
+        self._agenda_events: list[dict] = []
         self._agenda_at: datetime | None = None
         self._posted_cache: list[str] = []
         self._posted_at: datetime | None = None
@@ -167,13 +174,33 @@ class Runtime:
             except Exception as e:  # noqa: BLE001 - a bad read must not stop the turn
                 self.transcript.append("agenda_failed", summary=repr(e)[:200])
                 events = []
+            self._agenda_events = events
             self._agenda_cache, self._agenda_at = ([
                 f"- {e['at']:%H:%M} {e['title']}"
-                + (f"  ← in {e['minutes']} minutes" if 0 <= e["minutes"] <= 30 else "")
+                + (f"  ← in {e['minutes']} minutes"
+                   if 0 <= e["minutes"] <= EVENT_URGENT_MINUTES else "")
                 for e in events], now)
         if not self._agenda_cache:
             return ""
         return "Left on his calendar today:\n" + "\n".join(self._agenda_cache)
+
+    def urgent_now(self) -> str | None:
+        """Why the next few minutes are time-critical, or None.
+
+        This is what buys an unprompted message the right to skip the backoff.
+        It reads the clock rather than taking the model's word, because a tier
+        the model declares is a tier it declares every time.
+
+        Only the calendar qualifies. Tasks carry a due *date*, not a time, so
+        "due today" says nothing about whether the next thirty minutes matter —
+        treating a dated task as urgent would reopen the channel all evening
+        and hand back the nudge loop through the side door.
+        """
+        self._agenda()   # refreshes _agenda_events under the same 10-minute TTL
+        for e in self._agenda_events:
+            if 0 <= e["minutes"] <= EVENT_URGENT_MINUTES:
+                return f"{e['title']} starts in {e['minutes']} minutes"
+        return None
 
     def _posted(self) -> str:
         """What his teachers posted that is not an assignment.

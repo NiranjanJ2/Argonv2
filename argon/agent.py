@@ -181,14 +181,26 @@ class Agent:
         is consecutive sends since his last word, so one reply reopens the
         channel immediately.
         """
-        # STOOD DOWN 16 Sep. A flat time backoff makes urgency a function of
-        # how long since the last message, which it is not: "All Project Sync
-        # starts in 15 minutes" is worth interrupting for whether or not a
-        # nudge went out ten minutes ago. Being replaced by a deadline bypass
-        # the server can verify — until then this must not swallow anything.
-        return None
+        # A deadline the server can see buys the interruption. Urgency is a
+        # property of the world, not of how long since the last message: "All
+        # Project Sync starts in 15 minutes" is worth interrupting for whether
+        # or not a nudge went out ten minutes ago.
+        #
+        # Checked here rather than declared by the model on purpose. A tier the
+        # model asserts is a tier the model will assert every time — the same
+        # failure as the task ids and the stand-down announcements. It cannot
+        # claim urgency; the clock either shows a deadline or it does not.
+        if self.urgent_now():
+            return None
 
         today = clock.day_key()
+        sent_today = sum(1 for e in self.t.window(2)
+                         if e.day == today and e.kind == "message_out")
+        if sent_today >= DAILY_UNPROMPTED_CAP:
+            return (f"Error: {sent_today} messages already today, which is the "
+                    f"cap. Nothing further unprompted until tomorrow or until "
+                    f"he speaks. Do not call say again.")
+
         unanswered, last_out = 0, None
         for e in reversed(self.t.window(2)):
             if e.day != today:
@@ -216,6 +228,12 @@ class Agent:
                     f"for another {left} minutes unless he speaks first.")
         return None
 
+    #: Replaced by the runtime with the real clock. Returns why the next few
+    #: minutes are time-critical, or None. The default is None, so a bare Agent
+    #: in a test is never accidentally urgent.
+    def urgent_now(self) -> str | None:  # pragma: no cover - overridden
+        return None
+
     #: Replaced by the runtime with the real channels. Returns the delivery
     #: failures; empty means it landed. The default accepts, so a bare Agent in
     #: a test is not reporting a broken channel.
@@ -234,6 +252,13 @@ class Agent:
 #: until he speaks. Deliberately steep — he replies rarely, and a missed nudge
 #: costs far less than him muting the channel.
 UNANSWERED_BACKOFF = (timedelta(minutes=45), timedelta(hours=3))
+
+#: Hard ceiling on unprompted messages in a day. The backoff bounds how close
+#: together they land; this bounds how many there are at all, which is the
+#: number the attention research actually converges on (three to five, enforced
+#: as a constraint rather than a target). A verified deadline still gets
+#: through — a missed event is not what this is protecting him from.
+DAILY_UNPROMPTED_CAP = 4
 
 #: An argon: link, or a bare task id (uuid4().hex[:12]). The link alternative
 #: comes first so the id *inside* argon:task/<id> matches as part of the link
@@ -370,10 +395,32 @@ def _selftest() -> None:
     a2.deliver = lambda text: []
     a2._background, a2._went_quiet = True, False
     assert a2.say("first") == "sent"
-    # The flat backoff is stood down: it could swallow a message about an event
-    # starting in fifteen minutes. Re-enable this assertion with the deadline
-    # bypass, which gates on what the message is about rather than the clock.
-    assert a2.say("second") == "sent"
+    assert a2.say("second").startswith("Error"), "a second unprompted send must wait"
+    t2.append("message_in", text="ok")
+    assert a2.say("third") == "sent", "his reply reopens the channel"
+
+    # A verified deadline buys the interruption — this is the case the flat
+    # backoff got wrong, swallowing "your event starts in fifteen minutes".
+    assert a2.say("fourth").startswith("Error")
+    a2.urgent_now = lambda: "All Project Sync starts in 12 minutes"
+    assert a2.say("your 19:00 starts in 12 minutes") == "sent"
+
+    # The cap bounds volume, which the backoff does not: spacing alone lets a
+    # long evening carry any number of them.
+    a2.urgent_now = lambda: None
+    while True:
+        t2.append("message_in", text="go on")       # reopen, so only the cap bites
+        r = a2.say("another")
+        if r != "sent":
+            break
+    assert "cap" in r, r
+    sent = sum(1 for e in t2.window(2) if e.kind == "message_out")
+    assert sent == DAILY_UNPROMPTED_CAP, sent
+
+    # A deadline still gets through the cap — a missed event is not what the
+    # cap protects him from.
+    a2.urgent_now = lambda: "Robotics starts in 8 minutes"
+    assert a2.say("robotics in 8") == "sent"
 
     # Going quiet is the action; announcing it is not going quiet.
     a2._went_quiet = True
