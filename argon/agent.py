@@ -24,8 +24,9 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 
-from argon import budget, context, provider
+from argon import budget, clock, context, provider
 from argon.config import Config
 from argon.store import Store
 from argon.tools import Tools, parse_calls
@@ -65,6 +66,16 @@ class Agent:
         used to swap that module global for the duration of a turn, and two
         overlapping turns left it pointing at a leaked closure forever.
         """
+        self._background = background
+        self._went_quiet = False
+        try:
+            return self._turn(background=background, extra=extra)
+        finally:
+            # Scoped to the turn, not left set. say() consults this, and a flag
+            # that outlives its turn silently gates the next caller.
+            self._background = False
+
+    def _turn(self, *, background: bool, extra: str = "") -> Outcome:
         out = Outcome()
         messages = context.build(self.t, self.system, extra=extra)
         schemas = self.tools.schemas(background=background)
@@ -140,6 +151,13 @@ class Agent:
         text = strip_ids((text or "").strip())
         if not text:
             return "Error: empty message not sent"
+        if getattr(self, "_background", False):
+            if self._went_quiet:
+                return ("Error: you called stand_down this turn. Going quiet is "
+                        "the action; announcing it is not going quiet. He was "
+                        "not messaged.")
+            if (wait := self._unanswered_gate()) is not None:
+                return wait
 
         errors = self.deliver(text)
         if errors:
@@ -149,6 +167,47 @@ class Agent:
                     f"Do not call say again this turn.")
         self.t.append("message_out", text=text)
         return "sent"
+
+    def _unanswered_gate(self) -> str | None:
+        """Refuse an unprompted message when the last ones went unanswered.
+
+        On 16 Sep this sent the after-school brief at 16:02, asked "want the
+        after-school brief now?" at 16:12, then sent the brief again at 16:22 —
+        three messages in twenty minutes, none answered. The prompt already
+        says not to; the prompt has said not to since the first draft. A rule
+        the model weighs against context is not a rule, so this is code.
+
+        Silence is earned back by him replying, not by time alone: the counter
+        is consecutive sends since his last word, so one reply reopens the
+        channel immediately.
+        """
+        today = clock.day_key()
+        unanswered, last_out = 0, None
+        for e in reversed(self.t.window(2)):
+            if e.day != today:
+                break
+            if e.kind == "message_in":
+                break
+            if e.kind == "message_out":
+                unanswered += 1
+                last_out = last_out or e
+        if not unanswered or last_out is None:
+            return None
+        if unanswered >= len(UNANSWERED_BACKOFF) + 1:
+            return ("Error: he has not answered any of your "
+                    f"{unanswered} messages today. Nothing further goes out "
+                    "until he speaks. Do not call say again.")
+        need = UNANSWERED_BACKOFF[unanswered - 1]
+        try:
+            since = clock.now() - datetime.fromisoformat(last_out.at)
+        except ValueError:
+            return None
+        if since < need:
+            left = int((need - since).total_seconds() // 60)
+            return (f"Error: your last message is {int(since.total_seconds() // 60)} "
+                    f"minutes old and unanswered. Not sent — nothing unprompted "
+                    f"for another {left} minutes unless he speaks first.")
+        return None
 
     #: Replaced by the runtime with the real channels. Returns the delivery
     #: failures; empty means it landed. The default accepts, so a bare Agent in
@@ -162,6 +221,12 @@ class Agent:
         return self.turn(background=False, extra=extra)
 
 
+
+#: What an unanswered message costs the next one. Index 0 is the wait after one
+#: unanswered send, index 1 after two; past the end of this nothing goes out
+#: until he speaks. Deliberately steep — he replies rarely, and a missed nudge
+#: costs far less than him muting the channel.
+UNANSWERED_BACKOFF = (timedelta(minutes=45), timedelta(hours=3))
 
 #: An argon: link, or a bare task id (uuid4().hex[:12]). The link alternative
 #: comes first so the id *inside* argon:task/<id> matches as part of the link
@@ -290,6 +355,22 @@ def _selftest() -> None:
 
         clock.set_for_test(None)
         del os.environ["ARGON_HOME"]
+    # Three messages in twenty minutes, none answered, is the failure this
+    # exists to stop. The gate counts sends since his last word, so a reply
+    # reopens the channel at once.
+    t2 = Transcript(Path(tmp) / "gate.db")
+    a2 = Agent(cfg, t2, store, Tools(t2), "SYS")
+    a2.deliver = lambda text: []
+    a2._background, a2._went_quiet = True, False
+    assert a2.say("first") == "sent"
+    assert a2.say("second").startswith("Error"), "a second unprompted send must wait"
+    t2.append("message_in", text="ok")
+    assert a2.say("third") == "sent", "his reply reopens the channel"
+
+    # Going quiet is the action; announcing it is not going quiet.
+    a2._went_quiet = True
+    assert a2.say("standing down for tonight").startswith("Error")
+
     # Ids are stripped in code because the prompt rule did not hold.
     assert strip_ids("HW 18 — task id ee4723185a15. Nothing else.") \
         == "HW 18. Nothing else."

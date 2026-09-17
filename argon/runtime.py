@@ -85,16 +85,33 @@ class Runtime:
         parts = []
         tasks = self.store.tasks()
         if tasks:
-            shown = tasks[:BOARD_LIMIT]
+            # Split, because the board is sorted due-ascending and that puts the
+            # stalest work first. On 16 Sep the brief opened with "two oldest
+            # overdue are AP Narrative Rewrite and HW 12, both due 2026-09-03"
+            # — thirteen days gone, nothing he was going to do that evening,
+            # and it read as the assistant picking assignments at random.
+            # Overdue is a standing condition; live work is the news.
+            today = clock.day_key()
+            live = [t for t in tasks if not t.due or t.due >= today]
+            late = [t for t in tasks if t.due and t.due < today]
+
+            shown = live[:BOARD_LIMIT]
             board = "\n".join(f"- [{t.id}] {t.line()}" for t in shown)
-            if len(tasks) > len(shown):
+            if len(live) > len(shown):
                 # Silent truncation against a prompt that demands "give him
                 # all of it" guarantees a quietly incomplete answer, and he
                 # cannot tell. At 59 open the model saw 25 and had no idea.
-                board += (f"\n… and {len(tasks) - len(shown)} more not shown. "
+                board += (f"\n… and {len(live) - len(shown)} more not shown. "
                           f"Call list_tasks for the full board before telling "
                           f"him what is due.")
-            parts.append(f"Open tasks ({len(tasks)}):\n{board}")
+            parts.append(f"Live tasks ({len(live)}), soonest first:\n{board}"
+                         if live else "Nothing due today or later.")
+            if late:
+                parts.append(
+                    f"Also {len(late)} overdue, oldest {late[0].due}. This is a "
+                    f"standing backlog, not news — do not open with it, and do "
+                    f"not list it unless he asks. Call list_tasks for the full "
+                    f"board.")
         else:
             parts.append("Open tasks: none.")
         facts = self.store.facts()
@@ -472,8 +489,13 @@ class Runtime:
                 return "Error: hours must be between 0.25 and 48."
             until = clock.now() + timedelta(hours=float(hours))
             store.set_quiet(until, reason or "he asked for quiet")
+            # Going quiet is the action. Announcing it is not going quiet — on
+            # 14 Sep it sent "Standing down for the night" at 23:23 and again
+            # at 23:54. say() enforces this on unprompted turns; the old return
+            # value said "say it once now", which is what it kept doing.
+            self.agent._went_quiet = True
             return (f"Standing down until {until:%a %H:%M}. You will not be woken "
-                    f"before then. Say it once now; do not repeat it.")
+                    f"before then. This is recorded — do not message him about it.")
 
         def resume() -> str:
             """Come back on watch. Only he can lift a stand-down.
@@ -496,10 +518,10 @@ class Runtime:
             return "back on watch"
 
         t.add("stand_down",
-              "Commit to silence. Call this when he asks you to back off, or when "
-              "there is nothing you can do until something outside changes. Say so "
-              "once, in the same turn, and then stay quiet — this is remembered, so "
-              "you never need to announce it again.",
+              "Go quiet. Call this when he asks you to back off, or when there is "
+              "nothing you can do until something outside changes. This is the "
+              "whole action: it is recorded and survives restarts, so there is "
+              "nothing to announce and no need to call it again.",
               stand_down,
               params={"hours": {"type": "number", "description": "how long to stay quiet"},
                       "reason": {"type": "string"}})
