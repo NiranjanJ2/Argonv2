@@ -304,6 +304,38 @@ class Runtime:
         p = config.home() / "device_token"
         return p.read_text().strip() if p.exists() else ""
 
+    def wake_phone(self, why: str) -> bool:
+        """Push the phone to reconcile now, instead of waiting to be opened.
+
+        Without this a published lock sits until he happens to launch the app
+        or iOS grants a background refresh — which is the v1 failure in a new
+        place: the state was right and nothing carried it to the device.
+
+        Best-effort on purpose, and never raises. A lock whose push fails is
+        still a lock; the phone applies it on its next wake either way, so a
+        dead token must not take down the tool call that set it.
+
+        The limit worth knowing: iOS stops delivering silent pushes *and*
+        background refresh to an app the user has force-quit from the app
+        switcher, until it is launched by hand again. Nothing server-side can
+        reach a force-quit app.
+        """
+        if not self.cfg.apns.enabled:
+            return False
+        token = self.device_token()
+        if not token:
+            self.transcript.append("wake_skipped", summary="no device registered")
+            return False
+        try:
+            result = self.push.silent(token, reason=why)
+        except Exception as e:  # noqa: BLE001
+            self.transcript.append("wake_failed", summary=repr(e)[:200])
+            return False
+        if not result.ok:
+            self.transcript.append("wake_failed",
+                                   summary=f"{result.status} {result.reason}")
+        return result.ok
+
     def push_channel(self, text: str) -> None:
         """Deliver to the phone. Raises when it could not.
 
@@ -529,16 +561,23 @@ class Runtime:
                 return "Error: minutes must be between 5 and 480."
             until = clock.now() + timedelta(minutes=float(minutes))
             store.set_lock(until, reason or "he asked to be locked in")
-            return (f"Lock published until {until:%H:%M}. The phone applies it "
-                    f"when it next wakes — usually seconds, but iOS decides, so "
-                    f"do not promise him it is already on. He can always "
-                    f"override, and an override you argue with is an app he "
-                    f"deletes.")
+            pushed = self.wake_phone("lock")
+            return (
+                f"Lock published until {until:%H:%M}. "
+                + ("The phone was pushed to apply it now — but a push is a "
+                   "request, not a receipt, so still do not tell him it is on."
+                   if pushed else
+                   "The phone could not be pushed, so it applies on its next "
+                   "wake, which may be hours. Do not tell him it is on.")
+                + " He can always override, and an override you argue with is "
+                  "an app he deletes."
+            )
 
         def unlock_phone() -> str:
             if store.lock() is None:
                 return "No lock is set."
             store.clear_lock("agent lifted it")
+            self.wake_phone("unlock")
             return "Lock lifted. The phone releases on its next wake."
 
         def resume() -> str:

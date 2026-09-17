@@ -235,6 +235,10 @@ def create_app(rt) -> Flask:
         # "always granted" was true only in the comment — the lock stayed up and
         # the next reconcile put the shield straight back.
         rt.store.clear_lock(f"he overrode for {minutes}m")
+        # Push immediately. This is the most latency-sensitive of the three:
+        # he is standing there locked out having just asked to be let go, and
+        # "it will clear on the next background refresh" is hours.
+        rt.wake_phone("override")
         rt.transcript.append("override", summary=f"released for {minutes}m")
         return jsonify({"ok": True, "minutes": minutes})
 
