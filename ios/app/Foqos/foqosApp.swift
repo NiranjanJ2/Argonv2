@@ -10,7 +10,9 @@ import BackgroundTasks
 import SwiftData
 import SwiftUI
 
-@MainActor private let container: ModelContainer = {
+// Not private: ArgonAppDelegate reconciles the server's lock against SwiftData
+// on background wakes, where there is no view and so no @Environment context.
+@MainActor let container: ModelContainer = {
   do {
     let container = try ModelContainer(
       for: BlockedProfileSession.self,

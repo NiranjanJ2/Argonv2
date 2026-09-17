@@ -33,7 +33,7 @@ final class ArgonAppDelegate: NSObject, UIApplicationDelegate {
   }
 
   private static var token: String {
-    UserDefaults.standard.string(forKey: "argon.token") ?? ""
+    UserDefaults.standard.string(forKey: "argon.token") ?? ArgonBridge.defaultToken
   }
 
   /// Ask for notifications the first time he opens the conversation, not at
@@ -44,6 +44,24 @@ final class ArgonAppDelegate: NSObject, UIApplicationDelegate {
     guard !UserDefaults.standard.bool(forKey: "argon.askedForPush") else { return }
     UserDefaults.standard.set(true, forKey: "argon.askedForPush")
     await push.requestAuthorisation()
+  }
+
+  /// Apply the server's lock whenever fresh state lands.
+  ///
+  /// Hung off the notification the store already posts rather than called from
+  /// each wake path: push, BGAppRefresh, scenePhase and a manual pull all end
+  /// in a successful refresh, and wiring four call sites means forgetting the
+  /// fifth. Reconcile compares before it acts, so the extra calls are free.
+  private func observeStateForLock() {
+    NotificationCenter.default.addObserver(
+      forName: .argonStateApplied, object: nil, queue: .main
+    ) { [weak self] _ in
+      MainActor.assumeIsolated {
+        guard let self else { return }
+        ArgonLockReconciler.reconcile(self.store.state.lock,
+                                      context: container.mainContext)
+      }
+    }
   }
 
   func reconfigure() async {
@@ -57,6 +75,7 @@ final class ArgonAppDelegate: NSObject, UIApplicationDelegate {
     _ application: UIApplication,
     didFinishLaunchingWithOptions options: [UIApplication.LaunchOptionsKey: Any]? = nil
   ) -> Bool {
+    observeStateForLock()
     BGTaskScheduler.shared.register(forTaskWithIdentifier: Self.refreshTaskID,
                                     using: nil) { task in
       guard let task = task as? BGAppRefreshTask else { return }

@@ -231,6 +231,10 @@ def create_app(rt) -> Flask:
         minutes = int_field(body(), "minutes", 120)
         if minutes is None or not 1 <= minutes <= 24 * 60:
             return jsonify({"error": "minutes must be 1-1440"}), 400
+        # Actually release it. This used to append a note and nothing else, so
+        # "always granted" was true only in the comment — the lock stayed up and
+        # the next reconcile put the shield straight back.
+        rt.store.clear_lock(f"he overrode for {minutes}m")
         rt.transcript.append("override", summary=f"released for {minutes}m")
         return jsonify({"ok": True, "minutes": minutes})
 
@@ -290,6 +294,20 @@ def create_app(rt) -> Flask:
         return jsonify(rt.ac_set(mac, changes))
 
     # -- clean v2 ---------------------------------------------------------
+    def lock_json() -> dict[str, Any] | None:
+        """The lock the phone reconciles against, or None.
+
+        Expiry is computed here rather than sent as a flag the phone has to
+        re-evaluate: a phone that wakes after the lock lapsed must release, and
+        a boolean frozen at publish time would hold it shut instead.
+        """
+        live = rt.store.lock()
+        if live is None:
+            return None
+        until, reason = live
+        return {"until": until.isoformat(), "reason": reason,
+                "seconds_left": max(0, int((until - clock.now()).total_seconds()))}
+
     @app.get("/v2/state")
     @require_token
     def v2_state():
@@ -303,6 +321,7 @@ def create_app(rt) -> Flask:
             "unread": rt.unread(),
             "budget": {"spent": budget.month()["usd"], "cap": rt.cfg.monthly_cap_usd,
                        "cached_fraction": budget.cached_fraction()},
+            "lock": lock_json(),
         })
 
     @app.get("/v2/messages")

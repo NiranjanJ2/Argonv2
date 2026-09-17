@@ -27,6 +27,16 @@ final class ArgonBridge: ObservableObject {
 
   static let publicURL = "https://argon.agentneon.dev"
 
+  /// Shipped in the binary. One user, one server, and a first launch that has
+  /// to paste a 43-character token before anything works is a first launch
+  /// that ends in Settings. Overridable — whatever he types wins, and this is
+  /// only the fallback when nothing is stored.
+  ///
+  /// It is readable by anyone who opens the .ipa. The server is the only thing
+  /// this protects, it is his own, and the alternative he actually chose was
+  /// no token pasted at all.
+  static let defaultToken = "7DxOSfpou3l79GER8v0X5lceUMmvyF6xk96BAofIu4E"
+
   /// `@Published` backed by `UserDefaults`, not `@AppStorage`.
   ///
   /// `@AppStorage` is a `DynamicProperty` built for views; inside a class it
@@ -46,7 +56,7 @@ final class ArgonBridge: ObservableObject {
     // The same keys ArgonSettingsView reads, so the two screens are two
     // windows onto one value rather than two places to set the same thing.
     serverURL = defaults.string(forKey: "argon.base") ?? "http://192.168.68.72:3997"
-    apiToken = defaults.string(forKey: "argon.token") ?? ""
+    apiToken = defaults.string(forKey: "argon.token") ?? Self.defaultToken
     profileName = defaults.string(forKey: "argon.profileName") ?? "Argon Lockdown"
     desiredMode = defaults.string(forKey: "argon.desiredMode") ?? "normal"
   }

@@ -127,6 +127,23 @@ struct ArgonBudget: Codable, Equatable {
 }
 
 /// `GET /v2/state` — everything the app needs in one call.
+/// A lock the server wants applied, as published state rather than a command.
+///
+/// `secondsLeft` is computed server-side, so a phone that wakes after the lock
+/// lapsed releases instead of holding the shield up on a stale boolean.
+struct ArgonLock: Codable, Equatable {
+  var until: String
+  var reason: String
+  var secondsLeft: Int
+
+  enum CodingKeys: String, CodingKey {
+    case until, reason
+    case secondsLeft = "seconds_left"
+  }
+
+  var isLive: Bool { secondsLeft > 0 }
+}
+
 struct ArgonState: Codable, Equatable {
   var now: String?
   var school: ArgonSchool
@@ -135,9 +152,10 @@ struct ArgonState: Codable, Equatable {
   var facts: [String]
   var unread: Int
   var budget: ArgonBudget?
+  var lock: ArgonLock?
 
   enum CodingKeys: String, CodingKey {
-    case now, school, ticking, tasks, facts, unread, budget
+    case now, school, ticking, tasks, facts, unread, budget, lock
   }
 
   init(from decoder: Decoder) throws {
@@ -149,6 +167,7 @@ struct ArgonState: Codable, Equatable {
     facts = try c.decodeIfPresent([String].self, forKey: .facts) ?? []
     unread = try c.decodeIfPresent(Int.self, forKey: .unread) ?? 0
     budget = try c.decodeIfPresent(ArgonBudget.self, forKey: .budget)
+    lock = try c.decodeIfPresent(ArgonLock.self, forKey: .lock)
   }
 
   static let empty = try! JSONDecoder().decode(ArgonState.self,

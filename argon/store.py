@@ -360,6 +360,42 @@ class Store:
             return None
         return (until, data.get("reason", "")) if until > clock.now() else None
 
+    def set_lock(self, until: datetime, reason: str) -> None:
+        """Publish a phone lock the app applies on its next wake.
+
+        State, not a command. The server cannot reach into the phone; it can
+        only say what it wants to be true, and the app reconciles when it next
+        runs. That means a lock is best-effort and may land late — see the
+        reconcile in ArgonStore for what iOS actually guarantees.
+        """
+        with self._lock:
+            self._db.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES ('lock', ?)",
+                (json.dumps({"until": until.isoformat(), "reason": reason}),))
+            self._db.commit()
+        self._t.append("lock_set", summary=f"until {until:%H:%M} — {reason}"[:200])
+
+    def lock(self) -> tuple[datetime, str] | None:
+        """The live lock, or None once it has lapsed. Expiry is read-time, so a
+        lock ends on its own even if nothing runs to clear it."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT value FROM settings WHERE key='lock'").fetchone()
+        if row is None:
+            return None
+        try:
+            data = json.loads(row["value"])
+            until = datetime.fromisoformat(data["until"])
+        except (json.JSONDecodeError, KeyError, ValueError):
+            return None
+        return (until, data.get("reason", "")) if until > clock.now() else None
+
+    def clear_lock(self, why: str = "cleared") -> None:
+        with self._lock:
+            self._db.execute("DELETE FROM settings WHERE key='lock'")
+            self._db.commit()
+        self._t.append("lock_cleared", summary=why[:200])
+
     def clear_quiet(self) -> None:
         with self._lock:
             self._db.execute("DELETE FROM settings WHERE key='quiet'")
@@ -523,6 +559,17 @@ def _selftest() -> None:
         assert s.quiet() is not None, "and hold until it does"
         s.clear_quiet()
         assert s.quiet() is None
+
+        # The lock expires at read time, so it ends on its own if nothing runs.
+        assert s.lock() is None
+        s.set_lock(clock.now() + timedelta(minutes=30), "homework")
+        assert s.lock() is not None and s.lock()[1] == "homework"
+        clock.set_for_test(clock.now() + timedelta(hours=1))
+        assert s.lock() is None, "a lapsed lock must not keep the phone shut"
+        clock.set_for_test(None)
+        s.set_lock(clock.now() + timedelta(minutes=30), "homework")
+        s.clear_lock("he asked out")
+        assert s.lock() is None
 
         clock.set_for_test(None)
         # An older database must survive the upgrade rather than refuse to open.

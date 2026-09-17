@@ -13,7 +13,7 @@ import SwiftUI
 struct ArgonSettingsView: View {
   let store: ArgonStore
   @AppStorage("argon.base") private var base = "http://192.168.68.72:3997"
-  @AppStorage("argon.token") private var token = ""
+  @AppStorage("argon.token") private var token = ArgonBridge.defaultToken
   @State private var checking = false
   @State private var result: String?
 

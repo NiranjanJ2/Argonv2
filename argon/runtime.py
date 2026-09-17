@@ -524,6 +524,23 @@ class Runtime:
             return (f"Standing down until {until:%a %H:%M}. You will not be woken "
                     f"before then. This is recorded — do not message him about it.")
 
+        def lock_phone(minutes: float = 60, reason: str = "") -> str:
+            if not 5 <= minutes <= 8 * 60:
+                return "Error: minutes must be between 5 and 480."
+            until = clock.now() + timedelta(minutes=float(minutes))
+            store.set_lock(until, reason or "he asked to be locked in")
+            return (f"Lock published until {until:%H:%M}. The phone applies it "
+                    f"when it next wakes — usually seconds, but iOS decides, so "
+                    f"do not promise him it is already on. He can always "
+                    f"override, and an override you argue with is an app he "
+                    f"deletes.")
+
+        def unlock_phone() -> str:
+            if store.lock() is None:
+                return "No lock is set."
+            store.clear_lock("agent lifted it")
+            return "Lock lifted. The phone releases on its next wake."
+
         def resume() -> str:
             """Come back on watch. Only he can lift a stand-down.
 
@@ -553,6 +570,16 @@ class Runtime:
               params={"hours": {"type": "number", "description": "how long to stay quiet"},
                       "reason": {"type": "string"}})
         t.add("resume", "Come back on watch before the stand-down expires.", resume)
+
+        t.add("lock_phone",
+              "Block his distracting apps for a while. Publishes the lock; the "
+              "phone applies it on its next wake, so it is never instant and you "
+              "must not tell him it already is. Only when he asks or has agreed "
+              "to it — locking him out unasked is how the app gets deleted.",
+              lock_phone,
+              params={"minutes": {"type": "number", "description": "5 to 480"},
+                      "reason": {"type": "string"}})
+        t.add("unlock_phone", "Lift a lock you set.", unlock_phone)
 
         t.add("sync_classroom",
               "Pull his Classroom work onto the task board. Runs on its own "
