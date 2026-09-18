@@ -159,7 +159,42 @@ final class ArgonStore {
     let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return }
     messages.append(.local(role: "user", text: trimmed))
+    let before = messages.filter { $0.isFromArgon }.count
     await enqueue(.say(text: trimmed))
+    await awaitReply(past: before)
+  }
+
+  /// Poll briefly for the answer, then stop.
+  ///
+  /// The server accepts the message and answers on a worker, so there is
+  /// nothing to wait on in the response. A silent push tells the app to fetch,
+  /// but push is rate-limited to a couple an hour and useless while he is
+  /// sitting in the chat — so the foreground does its own short poll and the
+  /// push covers the backgrounded case.
+  ///
+  /// Bounded on purpose: a timer that runs forever is a battery cost paid all
+  /// day for a message he sends twice. If the reply misses the window it still
+  /// arrives on the next refresh — the transcript is the truth, not this loop.
+  private func awaitReply(past count: Int) async {
+    let deadline = Date().addingTimeInterval(replyWindow)
+    while Date() < deadline {
+      try? await Task.sleep(for: .milliseconds(1200))
+      await refreshMessagesOnly()
+      if messages.filter({ $0.isFromArgon }).count > count { return }
+    }
+  }
+
+  /// 45s: past a slow turn with tool calls, short of waiting on a dead server.
+  private let replyWindow: TimeInterval = 45
+
+  /// Messages without the full state read — this runs up to 35 times per send.
+  private func refreshMessagesOnly() async {
+    guard let newMessages = try? await client.messages(since: highestSeq) else { return }
+    merge(newMessages.messages)
+    if !newMessages.messages.isEmpty {
+      connection = .live(at: Date())
+      lastRefresh = Date()
+    }
   }
 
   func markRead() async {

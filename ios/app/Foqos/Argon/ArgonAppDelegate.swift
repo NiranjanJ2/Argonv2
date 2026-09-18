@@ -28,8 +28,8 @@ final class ArgonAppDelegate: NSObject, UIApplicationDelegate {
 
   /// Server address and token live in settings, never in source.
   private static var baseURL: URL {
-    URL(string: UserDefaults.standard.string(forKey: "argon.base") ?? "")
-      ?? URL(string: "http://192.168.68.72:3997")!
+    URL(string: ArgonBridge.resolvedBase())
+      ?? URL(string: ArgonBridge.publicURL)!
   }
 
   private static var token: String {

@@ -360,9 +360,16 @@ def create_app(rt) -> Flask:
             # FIX: one 300 KB paste otherwise sits in the two-day window and is
             # re-sent on every tick for two days, usually over the context limit.
             return jsonify({"error": f"message over {MAX_MESSAGE_CHARS} characters"}), 413
-        out = rt.receive(text, source=text_field(data, "source") or "ios")
-        return jsonify({"reply": out.text or "", "spoke": out.spoke,
-                        "cost": round(out.cost, 6), "error": out.error or None})
+        # Accepted, not answered. Holding the request open for the whole turn
+        # is what made the chat feel like a poll: ten seconds to send, ten more
+        # to hear back. `wait=1` keeps the old synchronous shape for scripts
+        # and the CLI, which do want the reply in the response.
+        if request.args.get("wait") == "1":
+            out = rt.receive(text, source=text_field(data, "source") or "ios")
+            return jsonify({"reply": out.text or "", "spoke": out.spoke,
+                            "cost": round(out.cost, 6), "error": out.error or None})
+        seq = rt.receive_async(text, source=text_field(data, "source") or "ios")
+        return jsonify({"accepted": True, "seq": seq}), 202
 
     @app.errorhandler(Exception)
     def on_error(exc: Exception):

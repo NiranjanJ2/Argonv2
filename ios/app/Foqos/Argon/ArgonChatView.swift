@@ -16,6 +16,11 @@ struct ArgonChatView: View {
           .padding(.horizontal, 18).padding(.vertical, 14)
         }
         .scrollIndicators(.hidden)
+        // Drag the transcript to put the keyboard away. The composer is pinned
+        // to the keyboard and the field is multiline, so Return inserts a
+        // newline rather than dismissing — without this there was no way out
+        // of the keyboard at all except switching tabs.
+        .scrollDismissesKeyboard(.interactively)
         // Without this the topmost bubble rides up under the status bar.
         .safeAreaPadding(.top, 8)
         .onChange(of: store.messages.count) { _, _ in scroll(proxy) }
@@ -40,6 +45,20 @@ struct ArgonChatView: View {
     .refreshable { await store.refresh() }
     .argonAmbience(ticking: store.state.ticking)
     .task { await store.markRead() }
+    .toolbar {
+      // Dragging is discoverable only if you already know it. This is the
+      // affordance people actually look for.
+      ToolbarItemGroup(placement: .keyboard) {
+        Spacer()
+        Button {
+          focused = false
+        } label: {
+          Label("Done", systemImage: "keyboard.chevron.compact.down")
+        }
+        .font(Argon.body.weight(.semibold))
+        .tint(Argon.accent)
+      }
+    }
   }
 
   private var empty: some View {

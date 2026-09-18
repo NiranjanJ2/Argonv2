@@ -27,6 +27,22 @@ final class ArgonBridge: ObservableObject {
 
   static let publicURL = "https://argon.agentneon.dev"
 
+  /// The address to use, migrating anyone still pointed at the old one.
+  ///
+  /// The LAN default only worked at home, which is most of the complaint: off
+  /// the house network the app simply failed. The tunnel reaches the same
+  /// server from anywhere and adds about 180ms, which is nothing next to a
+  /// model turn. A stored value wins — except the dead one, which is rewritten
+  /// rather than left to fail forever, since a default cannot help a key that
+  /// is already set.
+  static func resolvedBase() -> String {
+    let dead = ["http://192.168.68.72:3997", "http://192.168.68.72:3995"]
+    let stored = UserDefaults.standard.string(forKey: "argon.base")
+    if let stored, !stored.isEmpty, !dead.contains(stored) { return stored }
+    UserDefaults.standard.set(publicURL, forKey: "argon.base")
+    return publicURL
+  }
+
   /// Shipped in the binary. One user, one server, and a first launch that has
   /// to paste a 43-character token before anything works is a first launch
   /// that ends in Settings. Overridable — whatever he types wins, and this is
@@ -55,7 +71,7 @@ final class ArgonBridge: ObservableObject {
     let defaults = UserDefaults.standard
     // The same keys ArgonSettingsView reads, so the two screens are two
     // windows onto one value rather than two places to set the same thing.
-    serverURL = defaults.string(forKey: "argon.base") ?? "http://192.168.68.72:3997"
+    serverURL = ArgonBridge.resolvedBase()
     apiToken = defaults.string(forKey: "argon.token") ?? Self.defaultToken
     profileName = defaults.string(forKey: "argon.profileName") ?? "Argon Lockdown"
     desiredMode = defaults.string(forKey: "argon.desiredMode") ?? "normal"

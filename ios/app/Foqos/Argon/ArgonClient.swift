@@ -144,9 +144,11 @@ actor ArgonClient {
       if let due { body["due"] = due }
       _ = try await request("v1/tasks", method: "POST", body: body)
     case .say(let text):
-      // A turn can take a while — the model may run tools.
+      // The server accepts and answers on a worker, so this is a fast append
+      // rather than the whole turn. It used to wait up to 120s with the bubble
+      // stuck on "sending…", which is what made the chat feel like a poll.
       _ = try await request("v2/say", method: "POST",
-                            body: ["text": text, "source": "ios"], timeout: 120)
+                            body: ["text": text, "source": "ios"], timeout: 20)
     case .markRead:
       _ = try await request("v1/ios/read", method: "POST", body: [:])
     }

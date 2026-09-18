@@ -231,17 +231,51 @@ class Runtime:
                 "nothing here can be marked done):\n"
                 + "\n".join(self._posted_cache))
 
-    def turn(self, *, background: bool) -> object:
+    def turn(self, *, background: bool, extra: str = "") -> object:
         """One turn with live state attached. Every entry point — tick, chat,
         webhook — goes through here, so they all get the same picture and they
-        queue rather than overlap."""
+        queue rather than overlap.
+
+        *extra* is appended after the live state, for the one caller that has
+        something to say about this particular turn rather than about the world.
+        """
         with self._turn_lock:
             self._refresh_prompt()
-            return self.agent.turn(background=background, extra=self.live_state())
+            state = self.live_state()
+            if extra:
+                state = f"{state}\n\n{extra}"
+            return self.agent.turn(background=background, extra=state)
 
     def receive(self, text: str, *, source: str = "ios") -> object:
         self.transcript.append("message_in", text=text, source=source)
         return self.turn(background=False)
+
+    def receive_async(self, text: str, *, source: str = "ios") -> int:
+        """Record his message, answer on a worker, return the transcript seq.
+
+        The chat used to hold the HTTP request open for the whole turn — model
+        latency, tool calls and all — so the phone showed "sending…" for ten
+        seconds before the bubble even landed, then waited again for the reply.
+        The send is now an append, which is instant; the answer arrives the same
+        way any other message does.
+
+        The seq comes back so the client knows what to wait past, rather than
+        guessing from a count that a concurrent tick could also move.
+        """
+        seq = self.transcript.append("message_in", text=text, source=source)
+
+        def answer() -> None:
+            try:
+                self.turn(background=False)
+            except Exception as e:  # noqa: BLE001 - a worker must not die silently
+                self.transcript.append("turn_failed", summary=repr(e)[:200])
+            else:
+                # The reply is in the transcript; tell the phone to come and get
+                # it rather than making it poll on a timer it has to pay for.
+                self.wake_phone("reply")
+
+        threading.Thread(target=answer, name="argon-turn", daemon=True).start()
+        return seq
 
     # -- delivery ---------------------------------------------------------
     def deliver(self, text: str) -> list[str]:
@@ -259,6 +293,11 @@ class Runtime:
             self.transcript.append("delivery_failed", summary="no channels attached")
             return ["no channel is attached"]
 
+        # First channel that accepts it wins; the rest are fallbacks, not
+        # copies. Fanning out to every channel meant one message arrived twice
+        # — once as a phone notification and once on Discord — so reading it in
+        # one place left it unread in the other and the same sentence had to be
+        # dismissed twice. Channels are attached in preference order.
         errors: list[str] = []
         for channel in self._channels:
             name = getattr(channel, "__self__", channel)
@@ -267,15 +306,17 @@ class Runtime:
                 channel(text)
             except Exception as e:  # noqa: BLE001
                 errors.append(f"{name}: {e}")
-        if not errors:
+                continue
+            if errors:
+                # It landed, but only after something failed. Worth recording:
+                # a channel that is quietly broken should be findable before it
+                # is the only one left.
+                self.transcript.append("delivery_fellback",
+                                       summary=f"used {name} after: "
+                                               + "; ".join(errors)[:260])
             return []
-        if len(errors) == len(self._channels):
-            self.transcript.append("delivery_failed", summary="; ".join(errors)[:300])
-            return errors
-        # Some route worked, so he got it. Still worth recording — a channel
-        # that is quietly broken should be findable before it is the only one.
-        self.transcript.append("delivery_partial", summary="; ".join(errors)[:300])
-        return []
+        self.transcript.append("delivery_failed", summary="; ".join(errors)[:300])
+        return errors
 
     def add_channel(self, send) -> None:
         self._channels.append(send)
@@ -671,7 +712,46 @@ class Runtime:
         if self._announce_budget_stop():
             return None
         self.transcript.append("tick")
-        return self.turn(background=True)
+        brief = self.brief_due()
+        out = self.turn(background=True, extra=self._brief_instruction() if brief else "")
+        # Recorded from what happened, not from what was asked. brief_due reads
+        # this, so the once-a-day guarantee is a row in the transcript rather
+        # than a sentence in the prompt — which is what let it send the brief at
+        # 16:02, ask "want the brief?" at 16:12 and send it again at 16:22.
+        if brief and getattr(out, "spoke", False):
+            self.transcript.append("brief_sent")
+        return out
+
+    def brief_due(self) -> bool:
+        """Whether the after-school brief still owes him one today.
+
+        A school day, past the hour his day starts, and not already sent. The
+        transcript is the record: a restart, a redeploy or a second tick inside
+        the same minute all see the same answer.
+        """
+        now = clock.now()
+        if now.weekday() > 4 or now.hour < schedule.WINDOW_START_HOUR:
+            return False
+        today = clock.day_key()
+        return not any(e.kind == "brief_sent" and e.day == today
+                       for e in self.transcript.window(1))
+
+    def _brief_instruction(self) -> str:
+        """The one turn a day that is asked to speak without being spoken to.
+
+        Stated rather than left to the model to notice the hour: every version
+        that relied on it noticing either skipped the brief or sent three.
+        """
+        return (
+            "THIS TURN IS THE AFTER-SCHOOL BRIEF. Send exactly one message, "
+            "now, using say. It is a one-way secretary brief: what is due "
+            "today and tomorrow, any real calendar conflict, and anything a "
+            "teacher posted that is not on the board. Two or three items, "
+            "chronological. Do not ask him anything, do not offer to send it, "
+            "do not propose a plan, and do not list the overdue backlog. If "
+            "there is genuinely nothing worth saying, say nothing and call no "
+            "tool — a brief with no content is worse than silence."
+        )
 
     def _announce_budget_stop(self) -> bool:
         """Tell him the budget is gone, if it is. Returns True when capped.
@@ -848,14 +928,40 @@ def _selftest() -> None:
         assert "no Google account is authorised for calendar" in unavailable
         assert "no Google account is authorised" in rt.sync_classroom()
 
-        # A channel that throws does not break delivery to the others.
-        rt.add_channel(lambda _: (_ for _ in ()).throw(RuntimeError("discord down")))
-        rt.add_channel(sent.append)
-        assert rt.deliver("x") == [], "one good channel means he received it"
-        assert sent.count("x") == 2, sent
-        kinds = [e.kind for e in rt.transcript.window(3)]
-        assert "delivery_partial" in kinds, "a broken channel stays findable"
+        # The brief is owed once a day and the transcript is what says so.
+        import argon.clock as _c
+        _c.set_for_test(datetime(2026, 9, 16, 17, 0, tzinfo=_c.TZ))   # Wednesday
+        briefer = Runtime(config.Config())
+        assert briefer.brief_due() is True, "a school afternoon owes him a brief"
+        briefer.transcript.append("brief_sent")
+        assert briefer.brief_due() is False, "and owes exactly one"
+        _c.set_for_test(datetime(2026, 9, 16, 11, 0, tzinfo=_c.TZ))
+        assert Runtime(config.Config()).brief_due() is False, "not before 4pm"
+        _c.set_for_test(datetime(2026, 9, 19, 17, 0, tzinfo=_c.TZ))   # Saturday
+        assert Runtime(config.Config()).brief_due() is False, "not at the weekend"
+        _c.set_for_test(None)
+
+        # A dead channel falls through to the next; a live one ends it. The
+        # count matters: fanning out delivered the same sentence twice, once to
+        # the phone and once to Discord, and reading it in one left it unread
+        # in the other.
+        fallback = Runtime(config.Config())
+        landed: list[str] = []
+        fallback.add_channel(lambda _: (_ for _ in ()).throw(RuntimeError("push down")))
+        fallback.add_channel(landed.append)
+        assert fallback.deliver("x") == [], "the fallback channel means he got it"
+        assert landed == ["x"], landed
+        kinds = [e.kind for e in fallback.transcript.window(3)]
+        assert "delivery_fellback" in kinds, "a broken channel stays findable"
         assert "delivery_failed" not in kinds
+
+        # A working first channel stops there — the second never sees it.
+        quiet = Runtime(config.Config())
+        first, second = [], []
+        quiet.add_channel(first.append)
+        quiet.add_channel(second.append)
+        assert quiet.deliver("once") == []
+        assert first == ["once"] and second == [], (first, second)
 
         # When nothing works, say() must hear about it.
         dead = Runtime(config.Config())
