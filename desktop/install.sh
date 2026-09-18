@@ -25,7 +25,7 @@ fi
 
 if [ ! -f "$HOME/.argon-widget.json" ]; then
   cat > "$HOME/.argon-widget.json" <<JSON
-{"base": "http://agentneon:3995", "token": "PUT-THE-API-TOKEN-HERE"}
+{"base": "https://argon.agentneon.dev", "token": "PUT-THE-API-TOKEN-HERE"}
 JSON
   echo "config    -> ~/.argon-widget.json (add the token)"
 fi

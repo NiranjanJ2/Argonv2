@@ -9,6 +9,11 @@ struct ArgonRootView: View {
   // Simulator.app in this toolchain — only the headless runtime — so there is
   // no way to tap a tab; without this seam every screen after the first needs
   // a code edit and a rebuild to look at.
+  @AppStorage("argon.setupComplete") private var setupComplete = false
+  private var needsSetup: Binding<Bool> {
+    Binding(get: { !setupComplete }, set: { if !$0 { setupComplete = true } })
+  }
+
   @State private var tab = Tab(rawKey: UserDefaults.standard.string(forKey: "argon.tab"))
 
   enum Tab: Hashable {
@@ -49,6 +54,12 @@ struct ArgonRootView: View {
         .tag(Tab.settings)
     }
     .tint(Argon.accent)
+    // First run asks which apps Argon may block, instead of sending him to
+    // Foqos to hand-create a profile whose name had to match a string this
+    // screen never showed him.
+    .sheet(isPresented: needsSetup) {
+      ArgonSetupView().interactiveDismissDisabled()
+    }
     // The tab bar sits on glass too, so the ambient field runs behind it
     // rather than stopping at a grey strip.
     .toolbarBackground(.ultraThinMaterial, for: .tabBar)
