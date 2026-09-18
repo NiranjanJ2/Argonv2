@@ -57,7 +57,17 @@ struct ArgonTask: Codable, Identifiable, Equatable, Hashable {
     let day = String(due.prefix(10))
     if day < today { return "overdue" }
     if day == today { return "today" }
+    if day == ArgonDate.tomorrow(after: today) { return "tomorrow" }
     return String(day.dropFirst(5))
+  }
+
+  /// Tonight's work: late, due today, or due tomorrow.
+  ///
+  /// Tomorrow counts because he does homework the evening before it is
+  /// collected — filing "due tomorrow" with next week's reading hid the thing
+  /// he was about to sit down to.
+  var isTonight: Bool {
+    ["overdue", "today", "tomorrow"].contains(dueLabel())
   }
 
   var isOverdue: Bool { dueLabel() == "overdue" }
@@ -202,6 +212,10 @@ struct ArgonState: Codable, Equatable {
   var overdue: [ArgonTask] {
     sortedTasks.filter { $0.isOverdue }.sorted { ($0.due ?? "") > ($1.due ?? "") }
   }
+
+  /// What he can still act on today, and what is real but not yet his problem.
+  var tonight: [ArgonTask] { upcoming.filter { $0.isTonight } }
+  var future: [ArgonTask] { upcoming.filter { !$0.isTonight } }
 }
 
 struct ArgonMessagesResponse: Codable {
@@ -234,11 +248,32 @@ enum ArgonDate {
   }
 
   static func today() -> String {
+    dayString(Date())
+  }
+
+  /// The day after *today*, as a yyyy-MM-dd string.
+  ///
+  /// Via the calendar rather than by adding 86,400 seconds: a DST boundary
+  /// makes one day 23 hours long, and "tomorrow" is a calendar question.
+  static func tomorrow(after today: String = ArgonDate.today()) -> String {
+    let f = formatter()
+    guard let date = f.date(from: today),
+          let next = Calendar(identifier: .gregorian).date(byAdding: .day,
+                                                           value: 1, to: date)
+    else { return today }
+    return f.string(from: next)
+  }
+
+  private static func dayString(_ date: Date) -> String {
+    formatter().string(from: date)
+  }
+
+  private static func formatter() -> DateFormatter {
     let f = DateFormatter()
     f.calendar = Calendar(identifier: .gregorian)
     f.locale = Locale(identifier: "en_US_POSIX")
     f.timeZone = TimeZone(identifier: "America/Los_Angeles")
     f.dateFormat = "yyyy-MM-dd"
-    return f.string(from: Date())
+    return f
   }
 }

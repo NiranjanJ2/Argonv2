@@ -7,6 +7,7 @@ struct ArgonTodayView: View {
   @State private var newTask = ""
   @State private var adding = false
   @State private var showOverdue = false
+  @State private var showFuture = false
   @FocusState private var addFocused: Bool
 
   var body: some View {
@@ -19,7 +20,7 @@ struct ArgonTodayView: View {
         statusCard
         boardCard
         overdueCard
-        if !store.state.facts.isEmpty { factsCard }
+        futureCard
         budgetCard
       }
       .padding(.horizontal, 18)
@@ -126,14 +127,14 @@ struct ArgonTodayView: View {
         HStack {
           Text("Due").font(Argon.cardTitle).foregroundStyle(Argon.Tone.primary)
           Spacer()
-          if !store.state.upcoming.isEmpty {
-            ArgonPill(text: "\(store.state.upcoming.count)")
+          if !store.state.tonight.isEmpty {
+            ArgonPill(text: "\(store.state.tonight.count)")
           }
         }
         .padding(.horizontal, 18).padding(.top, 18).padding(.bottom, 12)
 
-        if store.state.upcoming.isEmpty {
-          Text(store.connection.isLive ? "Nothing due." : "Nothing cached.")
+        if store.state.tonight.isEmpty {
+          Text(store.connection.isLive ? "Nothing due tonight." : "Nothing cached.")
             .font(Argon.body).foregroundStyle(Argon.Tone.faint)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 18).padding(.bottom, 18)
@@ -141,7 +142,7 @@ struct ArgonTodayView: View {
 
         // The started task is the hero card above; repeating it here cost
         // most of a screenful.
-        ForEach(store.state.upcoming.filter { !$0.isStarted }) { task in
+        ForEach(store.state.tonight.filter { !$0.isStarted }) { task in
           ArgonDivider().padding(.leading, 18)
           ArgonTaskRow(task: task, store: store)
         }
@@ -218,15 +219,46 @@ struct ArgonTodayView: View {
     }
   }
 
-  private var factsCard: some View {
-    ArgonGlass(tint: Argon.accentDeep) {
-      VStack(alignment: .leading, spacing: 10) {
-        Text("What Argon knows")
-          .font(Argon.heading).foregroundStyle(Argon.Tone.primary)
-        ForEach(store.state.facts, id: \.self) { fact in
-          HStack(alignment: .top, spacing: 10) {
-            Circle().fill(Argon.accent).frame(width: 5, height: 5).padding(.top, 8)
-            Text(fact).font(Argon.body).foregroundStyle(Argon.Tone.secondary)
+  /// Work that is real but not yet his problem, folded away.
+  ///
+  /// This replaced "What Argon knows", which listed the standing facts the
+  /// agent had recorded. Interesting once; after that it was a block of text
+  /// he had already read, sitting above the only thing on the screen he acts
+  /// on. Future work at least becomes tonight's work eventually.
+  ///
+  /// Collapsed by default with the count in the header, so nothing is hidden —
+  /// the whole board sorted by date put August at the top and next week fifty
+  /// rows down, which is the failure this is avoiding.
+  @ViewBuilder private var futureCard: some View {
+    let later = store.state.future
+    if !later.isEmpty {
+      ArgonGlass(tint: Argon.accentDeep, padding: 0) {
+        VStack(alignment: .leading, spacing: 0) {
+          Button {
+            withAnimation(.snappy(duration: 0.22)) { showFuture.toggle() }
+          } label: {
+            HStack(spacing: 10) {
+              Image(systemName: showFuture ? "chevron.down" : "chevron.right")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(Argon.accentSoft)
+              Text("Future work")
+                .font(Argon.heading).foregroundStyle(Argon.Tone.primary)
+              Spacer()
+              ArgonPill(text: "\(later.count)", colour: Argon.accent)
+            }
+            .padding(.horizontal, 18)
+            .frame(minHeight: 52)
+            .contentShape(Rectangle())
+          }
+          .buttonStyle(.plain)
+          .accessibilityLabel("Future work, \(later.count) items")
+
+          if showFuture {
+            ForEach(later) { task in
+              ArgonDivider().padding(.leading, 18)
+              ArgonTaskRow(task: task, store: store, showDue: true)
+            }
+            .padding(.bottom, 4)
           }
         }
       }

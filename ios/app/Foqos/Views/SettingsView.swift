@@ -43,57 +43,9 @@ struct SettingsView: View {
   /// the model called the tool — and after 11 PM that tool refuses until you
   /// confirm in a second message. Good guard against Argon locking the phone
   /// on a guess; useless as a way to flip a switch you are already holding.
-  @ViewBuilder
-  private var weekendMode: some View {
-    Section {
-      Toggle(isOn: weekendBinding) {
-        VStack(alignment: .leading, spacing: 3) {
-          Text("Weekend mode")
-            .font(.headline)
-          Text(
-            argonBridge.desiredMode == "weekend"
-              ? "\(weekendMinutes) minutes an hour, then shielded"
-              : "Meter distracting apps instead of blocking them"
-          )
-          .font(.caption)
-          .foregroundStyle(.secondary)
-        }
-      }
-      .disabled(isSettingMode)
-
-      if argonBridge.desiredMode == "weekend" {
-        Picker("Budget", selection: $weekendMinutes) {
-          ForEach([5, 10, 15, 20, 30, 45, 60], id: \.self) { Text("\($0)m").tag($0) }
-        }
-        .onChange(of: weekendMinutes) { _, minutes in
-          guard argonBridge.desiredMode == "weekend" else { return }
-          setMode("weekend", minutes: minutes)
-        }
-      }
-
-      Button {
-        weekendSelection = ArgonMetered.configuredApps ?? FamilyActivitySelection()
-        showingWeekendPicker = true
-      } label: {
-        HStack {
-          Text("Apps to meter")
-            .foregroundStyle(.primary)
-          Spacer()
-          Text(weekendAppsCaption)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-          Image(systemName: "chevron.right")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-        }
-      }
-    } footer: {
-      Text(
-        "Apps stay open until you have used your budget for the hour, then they "
-          + "shield until the next one. Time you do not spend is not lost."
-      )
-    }
-  }
+  // Weekend mode moved to the Focus tab, next to the rest of the blocking
+  // controls. It was here beside the server address and the API token, which
+  // are not decisions he revisits weekly; see ArgonWeekendCard.
 
   private var weekendAppsCaption: String {
     guard ArgonMetered.hasConfiguredApps, let selection = ArgonMetered.configuredApps else {
@@ -363,7 +315,6 @@ struct SettingsView: View {
           }
         }
 
-        weekendMode
         emergencyRelease
       }
       .navigationTitle("Settings")

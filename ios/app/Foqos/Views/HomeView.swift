@@ -121,6 +121,12 @@ struct HomeView: View {
           }
           .padding(.horizontal, 16)
 
+          // Weekend mode sits with the blocking controls rather than in the
+          // stock settings screen, which is where he goes to change a server
+          // address, not to decide how this weekend works.
+          ArgonWeekendCard()
+            .padding(.horizontal, 16)
+
           HomeAlertsView(
             alerts: alertsManager.alerts,
             onAlertTapped: { alert in
