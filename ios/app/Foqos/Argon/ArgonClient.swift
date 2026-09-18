@@ -154,6 +154,12 @@ actor ArgonClient {
     }
   }
 
+  /// Diagnostics. Fire-and-forget from the caller's point of view, but it
+  /// throws so ArgonLog can keep the batch when it does not land.
+  func log(_ entries: [[String: Any]]) async throws {
+    _ = try await request("v2/log", method: "POST", body: ["entries": entries])
+  }
+
   func register(deviceToken: String) async throws {
     _ = try await request("v1/ios/register", method: "POST", body: ["token": deviceToken])
   }

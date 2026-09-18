@@ -94,12 +94,17 @@ final class ArgonStore {
       // Foqos's own home screen listens for these rather than observing the
       // store, so posting here keeps it in step without it importing Argon.
       NotificationCenter.default.post(name: .argonStateApplied, object: nil)
+      ArgonLog.note("refresh",
+                    "ok — \(state.tasks.filter { !$0.done }.count) open, "
+                    + "\(state.overdueCount) overdue")
+      await ArgonLog.shared.flush(using: client)
     } catch {
       let text = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
       // The cache's own timestamp, not `now`. Falling back to Date() made the
       // header pill read "just now" directly above "Argon didn't answer in
       // time", over data that was thirteen hours old — while Settings, from
       // the same value, correctly said "cached 13h ago".
+      ArgonLog.note("refresh", "failed: \(text)")
       connection = .stale(at: lastRefresh ?? cachedAt ?? Date(), why: text)
       // A read failing is not worth a banner when there is cached data to show;
       // the connection badge already says so.
@@ -224,10 +229,12 @@ final class ArgonStore {
   }
 
   private func enqueue(_ kind: PendingWrite.Kind) async {
+    ArgonLog.note("write", "queued \(kind)")
     _ = await outbox.enqueue(kind)
     pendingCount = await outbox.count
     await flush()
     await refreshAfterWrite()
+    ArgonLog.note("write", "after flush, \(pendingCount) still queued")
   }
 
   /// A read after a successful write, so the server's version replaces the

@@ -439,7 +439,11 @@ class Runtime:
         added = 0
         for item in items:
             seen.add(item["id"])
-            if item["id"] not in known:
+            # Genuinely new, not merely "not currently open". external_ids only
+            # lists open tasks, so counting against it reported every completed
+            # assignment as freshly added on every sync — "20 added" for a board
+            # where nothing had changed, which then went into the prompt.
+            if self.store.task_by_external(item["id"]) is None:
                 added += 1
             self.store.add_task(item["title"], subject=item["course"],
                                 due=item["due"] or "", source="classroom",

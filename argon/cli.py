@@ -178,6 +178,21 @@ def cmd_ac(args) -> int:
     return 0
 
 
+def cmd_applog(_args) -> int:
+    """Read back what the app logged. The phone has no console; this is it."""
+    from argon import runtime
+    rt = runtime.Runtime()
+    rows = [e for e in rt.transcript.window(2) if e.kind == "app_log"]
+    if not rows:
+        print("nothing from the app in the last two days")
+        return 0
+    for e in rows[-200:]:
+        p = e.payload
+        print(f"{p.get('at_device', e.at)[:19]}  {p.get('area', '?'):<8} "
+              f"{p.get('summary', '')}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="argon")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -185,6 +200,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gateway", help="run the assistant").set_defaults(fn=cmd_gateway)
     sub.add_parser("doctor", help="check what has broken before").set_defaults(fn=cmd_doctor)
     sub.add_parser("tick", help="run one tick now").set_defaults(fn=cmd_tick)
+    sub.add_parser("applog", help="what the phone reported").set_defaults(fn=cmd_applog)
     sub.add_parser("ac-scan", help="find and bind air conditioners").set_defaults(fn=cmd_ac)
 
     chat = sub.add_parser("chat", help="talk to Argon")

@@ -19,6 +19,10 @@ import logging
 from functools import wraps
 from typing import Any
 
+#: Per-flush cap. A stuck client must not be able to fill the
+#: transcript with one request.
+APP_LOG_MAX_ENTRIES = 100
+
 from flask import Flask, g, jsonify, request
 
 from argon import bell, budget, clock, schedule
@@ -327,6 +331,43 @@ def create_app(rt) -> Flask:
                        "cached_fraction": budget.cached_fraction()},
             "lock": lock_json(),
         })
+
+    @app.post("/v2/log")
+    @require_token
+    def v2_log():
+        """What the app did while nobody was watching.
+
+        The phone is the half of this system with no console. When twenty
+        checkmarks were answered 200 and then quietly reverted, the only
+        evidence was the server's own access log — nothing said what the app
+        believed, what it queued, or what it retried. These lines are that.
+
+        Stored as ordinary transcript rows so they age out with the two-day
+        window like everything else, and capped per request so a stuck client
+        cannot fill the log with one flush.
+        """
+        data = body()
+        entries = data.get("entries")
+        if not isinstance(entries, list):
+            return jsonify({"error": "entries must be a list"}), 400
+        kept = 0
+        for entry in entries[:APP_LOG_MAX_ENTRIES]:
+            if not isinstance(entry, dict):
+                continue
+            rt.transcript.append(
+                "app_log",
+                at_device=str(entry.get("at", ""))[:40],
+                area=str(entry.get("area", "app"))[:40],
+                summary=str(entry.get("text", ""))[:400])
+            kept += 1
+        return jsonify({"ok": True, "stored": kept})
+
+    @app.get("/v2/log")
+    @require_token
+    def v2_log_read():
+        rows = [{"at": e.at, **e.payload}
+                for e in rt.transcript.window(2) if e.kind == "app_log"]
+        return jsonify({"entries": rows[-int(request.args.get("limit", 200)):]})
 
     @app.get("/v2/messages")
     @require_token
