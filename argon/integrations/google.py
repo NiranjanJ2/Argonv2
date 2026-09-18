@@ -509,6 +509,95 @@ def _parse_rfc3339(value: str | None) -> datetime | None:
         return None
 
 
+#: The homework block inside a daily material post. AP Lang writes the day's
+#: agenda, then "HW:", then the work — so everything before it is classwork
+#: that is already done by the time he reads this.
+_HW_HEADER = re.compile(r"^\s*(?:HW|HOMEWORK)\s*:?\s*$", re.I | re.M)
+
+#: "by Fri., 9/18", "due Tues., 9/15", "due 9/18", "by 9/18".
+_HW_DUE = re.compile(r"\b(?:by|due)\b[^0-9]{0,12}(\d{1,2})\s*/\s*(\d{1,2})", re.I)
+
+#: "1. Read The Crucible Act 3" — the numbering AP Lang uses for each item.
+_HW_ITEM = re.compile(r"^\s*(?:\d+[.)]|[-*•])\s*(.+?)\s*$", re.M)
+
+
+def _hw_due_date(text: str, posted: datetime) -> str | None:
+    """The "by Fri., 9/18" inside one homework line, as YYYY-MM-DD.
+
+    The year is not written, so it comes from when the post went up: a 1/8 due
+    date on a December post is next January, not eleven months ago.
+    """
+    m = _HW_DUE.search(text)
+    if not m:
+        return None
+    month, day = int(m.group(1)), int(m.group(2))
+    if not (1 <= month <= 12 and 1 <= day <= 31):
+        return None
+    year = posted.year + (1 if month < posted.month - 6 else 0)
+    try:
+        return datetime(year, month, day, tzinfo=clock.TZ).strftime("%Y-%m-%d")
+    except ValueError:
+        return None
+
+
+def material_homework(account: str, days_back: int = 10) -> list[dict[str, Any]]:
+    """Homework scraped out of daily material posts.
+
+    Some classes never create assignments. AP Lang posts one material a day —
+    "WEEK 6 - WED 9/16" — whose description carries the agenda and then an
+    "HW:" block. None of it is courseWork, so it has no submission and no due
+    date, `outstanding_assignments` never sees it, and the class reads as
+    having no homework at all. That is the worst thing this board can say,
+    because he believes it.
+
+    Only the HW block is taken. The lines above it are what happened in class
+    that day, already done by the time he reads this, and adding them would
+    bury the two lines that are actually work.
+
+    Deduplicated on the text itself, because the same item is repeated in every
+    post until it is due: "Read The Crucible Act 3 by Fri., 9/18" appears in
+    Monday's, Tuesday's, Wednesday's and Thursday's posts and is one task.
+    """
+    svc = _service(account, "classroom", "v1")
+    courses = {c["id"]: c.get("name", "?")
+               for c in svc.courses().list(
+                   courseStates=["ACTIVE"]).execute().get("courses", [])}
+    floor = clock.now() - timedelta(days=days_back)
+
+    seen: dict[str, dict[str, Any]] = {}
+    for cid, name in courses.items():
+        try:
+            page = svc.courses().courseWorkMaterials().list(
+                courseId=cid, courseWorkMaterialStates=["PUBLISHED"],
+                pageSize=30).execute()
+        except Exception:  # noqa: BLE001 - a locked course must not stop the rest
+            continue
+        for item in page.get("courseWorkMaterial", []):
+            posted = _parse_rfc3339(item.get("updateTime")
+                                    or item.get("creationTime"))
+            if posted is None or posted < floor:
+                continue
+            body = item.get("description") or ""
+            split = _HW_HEADER.split(body, maxsplit=1)
+            if len(split) < 2:
+                continue
+            for line in _HW_ITEM.findall(split[-1]):
+                title = " ".join(line.split())
+                if len(title) < 4:
+                    continue
+                key = f"{cid}:{title.lower()}"
+                if key in seen:
+                    continue
+                seen[key] = {
+                    "id": f"m{abs(hash(key)) % 10**11:011d}",
+                    "title": _HW_DUE.sub("", title).strip(" .,;–—-") or title,
+                    "course": tidy_course(name),
+                    "due": _hw_due_date(title, posted),
+                    "courseId": cid,
+                }
+    return [v for v in seen.values() if v["due"]]
+
+
 def list_assignments(account: str, limit: int = 30, days_back: int = DAYS_BACK) -> str:
     """What he still owes, across his active courses.
 
@@ -558,16 +647,20 @@ def tidy_course(name: str) -> str:
 def classroom_due(coursework: dict[str, Any]) -> datetime | None:
     """Local due datetime of a courseWork item, or None if it has no deadline.
 
-    Taken from v1, which had this right and explains why:
+    The date comes from ``dueDate`` verbatim; only the *time of day* comes from
+    ``dueTime`` converted out of UTC. The two fields are not one instant, and
+    treating them as one is the bug that put Math a day early on his board.
 
-        Classroom reports ``dueDate``/``dueTime`` in **UTC**; reading them as
-        local time shifts every deadline by the UTC offset (an 11:59 PM
-        assignment lands on the following morning).
+    Google documents both as UTC, and ``dueTime`` genuinely is — 06:59Z is a
+    teacher setting 11:59 PM, not a 6:59 AM deadline. But ``dueDate`` is stored
+    as the day the teacher picked, unconverted, and that is the day Classroom
+    shows him. So HW 21 arrives as ``dueDate=2026-09-18, dueTime=06:59Z`` and
+    Classroom displays "Due Sep 18, 11:59 PM".
 
-    That is not hypothetical here. His Classroom returns
-    ``dueDate=2026-09-22, dueTime={'hours': 6, 'minutes': 59}`` for work due at
-    23:59 on the 21st — 06:59Z is 23:59 the previous day in Pacific. Reading
-    the date alone put **every dated assignment on his board a day late**.
+    Reading the pair as a single UTC instant gives Sep 17 23:59 — one day
+    earlier than both the teacher and the app he checks. Verified against his
+    own Classroom: it says Sep 18. Taking the date from one field and the clock
+    from the other reconstructs exactly what he sees.
 
     With no ``dueTime`` there is no official instant; local end-of-day is only
     a work-by fallback.
@@ -580,12 +673,15 @@ def classroom_due(coursework: dict[str, Any]) -> datetime | None:
         if due_time is None:
             return datetime(due_date["year"], due_date["month"], due_date["day"],
                             23, 59, tzinfo=clock.TZ)
-        return datetime(
-            due_date["year"], due_date["month"], due_date["day"],
-            due_time.get("hours", 0), due_time.get("minutes", 0),
-            due_time.get("seconds", 0), due_time.get("nanos", 0) // 1000,
-            tzinfo=UTC,
-        ).astimezone(clock.TZ)
+        # Convert the clock, keep the calendar. The offset is taken on the
+        # assignment's own date, not a fixed one: a January reference put every
+        # September deadline an hour out, because Pacific is PST then and PDT
+        # now. Only the resulting hour and minute are used.
+        wall = datetime(due_date["year"], due_date["month"], due_date["day"],
+                        due_time.get("hours", 0), due_time.get("minutes", 0),
+                        tzinfo=UTC).astimezone(clock.TZ)
+        return datetime(due_date["year"], due_date["month"], due_date["day"],
+                        wall.hour, wall.minute, tzinfo=clock.TZ)
     except (KeyError, TypeError, ValueError):
         return None
 

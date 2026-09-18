@@ -417,6 +417,23 @@ class Runtime:
         except Exception as e:  # noqa: BLE001
             return f"Classroom sync failed: {type(e).__name__}: {e}"
 
+        # Classes that never create assignments. AP Lang posts one material a
+        # day whose description carries an "HW:" block, and none of it is
+        # courseWork — so without this the class shows nothing due, all term.
+        # Merged into the same list so they land on the board identically; a
+        # failure here must not lose the real assignments, which is why it is
+        # caught separately.
+        try:
+            items = items + google.material_homework(account)
+        except Exception as e:  # noqa: BLE001
+            self.transcript.append("material_scrape_failed", summary=repr(e)[:200])
+            # Counted as a refusal, which stops the close pass below. Absence
+            # from a failed read is not evidence he handed anything in: without
+            # this a scrape that threw would mark every scraped AP Lang task
+            # done and it would never come back — the same way a 403 course
+            # silently completed its homework.
+            refused.append(f"posted material ({type(e).__name__})")
+
         known = self.store.external_ids(source="classroom")
         seen: set[str] = set()
         added = 0
