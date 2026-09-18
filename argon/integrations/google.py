@@ -19,6 +19,7 @@ call, which was a known cost in the old system and never fixed.
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
@@ -589,7 +590,11 @@ def material_homework(account: str, days_back: int = 10) -> list[dict[str, Any]]
                 if key in seen:
                     continue
                 seen[key] = {
-                    "id": f"m{abs(hash(key)) % 10**11:011d}",
+                    # sha1, not hash(): Python randomises string hashing per
+                    # process, so every restart minted new ids, the sync saw
+                    # them as new work, added them and closed yesterday's — the
+                    # same three AP Lang tasks added and completed on a loop.
+                    "id": "m" + hashlib.sha1(key.encode()).hexdigest()[:11],
                     "title": _HW_DUE.sub("", title).strip(" .,;–—-") or title,
                     "course": tidy_course(name),
                     "due": _hw_due_date(title, posted),

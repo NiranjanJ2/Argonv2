@@ -462,7 +462,10 @@ class Runtime:
             note_suffix = ""
             for external_id, task in known.items():
                 if external_id not in seen:
-                    if self.store.complete_task(task.id):
+                    # Marked as the sync's own closure, so a later sync that
+                    # sees the work again may undo it. A closure he made by
+                    # hand is never undone.
+                    if self.store.complete_task(task.id, by="sync"):
                         closed += 1
 
         self._last_classroom_sync = clock.now()

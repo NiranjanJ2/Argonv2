@@ -145,6 +145,10 @@ class Store:
     #: script fails and the service will not start.
     MIGRATIONS = (
         ("tasks", "external_id", "TEXT"),
+        # Who closed it. Classroom re-import may undo its own wrong closure but
+        # must never undo his, and without recording the difference the two are
+        # indistinguishable the moment the row is written.
+        ("tasks", "done_by", "TEXT"),
     )
 
     def _migrate(self) -> None:
@@ -165,11 +169,17 @@ class Store:
         if external_id:
             existing = self.task_by_external(external_id)
             if existing is not None:
-                if existing.done:
+                if existing.done and self._closed_by(existing.id) != "him":
                     # The source still says he owes this, so a previous
                     # closure was wrong. Without this a task closed by mistake
                     # could never come back: the import matched the completed
                     # row and only updated it.
+                    #
+                    # Never when *he* closed it. Classroom keeps listing work
+                    # he has done but not submitted — a reading, a corrections
+                    # sheet handed in on paper — so an unconditional reopen
+                    # walked back every checkmark he made, twenty of them in
+                    # one evening, each one a PATCH the server answered 200.
                     self.reopen_task(existing.id)
                 return self.update_task(existing.id, due=due or None,
                                         title=title, subject=subject or None) \
@@ -233,20 +243,31 @@ class Store:
         self._t.append("task_started", id=tid, summary=title)
         return self.task(tid)
 
-    def complete_task(self, tid: str) -> Task | None:
+    def complete_task(self, tid: str, *, by: str = "him") -> Task | None:
         """Mark done. Guard and write share one lock, so two concurrent
-        completes cannot both pass and log the task twice."""
+        completes cannot both pass and log the task twice.
+
+        *by* is "him" for a tap or a word, "sync" when Classroom stopped
+        listing the work. Only a sync closure may be undone by a later sync —
+        see add_task.
+        """
         with self._lock:
             row = self._db.execute(
                 "SELECT * FROM tasks WHERE id=? AND done=0", (tid,)).fetchone()
             if row is None:
                 return None
-            self._db.execute("UPDATE tasks SET done=1, done_at=? WHERE id=?",
-                             (clock.now().isoformat(), tid))
+            self._db.execute("UPDATE tasks SET done=1, done_at=?, done_by=? WHERE id=?",
+                             (clock.now().isoformat(), by, tid))
             self._db.commit()
             title = row["title"]
         self._t.append("task_done", id=tid, summary=title)
         return self.task(tid)
+
+    def _closed_by(self, tid: str) -> str | None:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT done_by FROM tasks WHERE id=?", (tid,)).fetchone()
+        return row["done_by"] if row else None
 
     def reopen_task(self, tid: str) -> Task | None:
         """Undo a completion. Used when a source still reports work as owed."""
@@ -475,12 +496,20 @@ def _selftest() -> None:
         assert s.task(first.id).due == "2026-09-13", "and its due date updates"
         assert list(s.external_ids(source="classroom")) == ["cw-17"]
 
-        # A task closed by mistake comes back when the source still owes it.
-        s.complete_task(first.id)
+        # A closure the *sync* made comes back when the source still owes it.
+        s.complete_task(first.id, by="sync")
         assert s.task(first.id).done is True
         again2 = s.add_task("HW 17", source="classroom", external_id="cw-17",
                             due="2026-09-13")
         assert again2.done is False, "re-import must reopen a wrongly closed task"
+
+        # A closure *he* made is final. Classroom keeps listing work he has
+        # done but not submitted, so an unconditional reopen walked back every
+        # checkmark he made — twenty in one evening, each a PATCH answered 200.
+        s.complete_task(first.id, by="him")
+        again3 = s.add_task("HW 17", source="classroom", external_id="cw-17",
+                            due="2026-09-13")
+        assert again3.done is True, "the sync must not undo his own checkmark"
         assert "task_reopened" in [e.kind for e in t.window(2)]
 
         assert s.complete_task(a.id).done is True
