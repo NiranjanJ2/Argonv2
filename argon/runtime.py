@@ -72,6 +72,7 @@ class Runtime:
         self.tools = Tools(self.transcript)
         self.push = Push(self.cfg.apns)
         self.ac = Gree()
+        self._load_ac()
         self.agent = Agent(self.cfg, self.transcript, self.store, self.tools,
                            system_prompt())
         self.agent.deliver = self.deliver
@@ -543,12 +544,77 @@ class Runtime:
         # until the next restart.
         self.cfg.discord.channel_id = channel_id
 
+    def _load_ac(self) -> None:
+        """Restore bound units from the store, and keep them saved thereafter.
+
+        Binding is chatty and the key is stable, so it is remembered. Held only
+        in memory, a restart forgot every unit and the next command failed
+        until somebody re-ran a scan by hand.
+        """
+        from argon.integrations.ac import Unit
+        for rec in self.store.ac_units():
+            self.ac.units[rec["mac"]] = Unit(
+                mac=rec["mac"], host=rec.get("host", ""), name=rec.get("name", ""),
+                key=rec.get("key", ""), gcm=bool(rec.get("gcm", True)))
+        self.ac.on_change = self._save_ac
+
+    def _save_ac(self) -> None:
+        self.store.save_ac_units([u.as_dict(with_key=True)
+                                  for u in self.ac.units.values()])
+
+    def ac_adopt(self, mac: str = "") -> dict:
+        """Scan, bind whatever is found, and remember it.
+
+        One call because the three steps have no useful intermediate state: a
+        unit that is found but not bound cannot be commanded, and a bind that
+        is not saved is lost on the next restart.
+        """
+        try:
+            found = self.ac.scan()
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "error": f"scan failed: {e}"}
+        if not found:
+            return {"ok": False, "error": "no air conditioners answered"}
+        bound, failed = [], []
+        for unit in found:
+            if mac and unit.mac != mac:
+                continue
+            try:
+                self.ac.bind(unit)
+                bound.append(unit.as_dict())
+            except ACError as e:
+                failed.append(f"{unit.mac}: {e}")
+        self._save_ac()
+        return {"ok": bool(bound), "bound": bound, "failed": failed}
+
     def ac_units(self) -> list[dict]:
         return [u.as_dict() for u in self.ac.units.values()]
 
+    def ac_find(self, wanted: str) -> str | None:
+        """A unit by MAC, by name, or the only one there is.
+
+        A Shortcut should not have to carry a MAC address. Names come from the
+        unit itself and are what he actually calls them.
+        """
+        if not wanted:
+            return next(iter(self.ac.units), None)
+        if wanted in self.ac.units:
+            return wanted
+        needle = wanted.strip().lower()
+        for mac, unit in self.ac.units.items():
+            if (unit.name or "").strip().lower() == needle:
+                return mac
+        for mac, unit in self.ac.units.items():
+            if needle in (unit.name or "").lower():
+                return mac
+        return None
+
     def ac_set(self, mac: str, changes: dict) -> dict:
         try:
-            return {"ok": True, "result": self.ac.set(mac, **changes)}
+            result = self.ac.set(mac, **changes)
+            # set() may have relocated the unit; keep the new address.
+            self._save_ac()
+            return {"ok": True, "result": result}
         except ACError as e:
             return {"ok": False, "error": str(e)}
 

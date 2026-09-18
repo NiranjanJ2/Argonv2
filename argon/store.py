@@ -402,6 +402,31 @@ class Store:
             return None
         return (until, data.get("reason", "")) if until > clock.now() else None
 
+    def ac_units(self) -> list[dict]:
+        """Air conditioners he has bound, with their keys.
+
+        Persisted because binding is chatty and the key a unit hands back is
+        stable. Held only in memory, every restart forgot them and the next
+        command failed until someone re-ran a scan — which is a poor thing to
+        discover at midnight in August.
+        """
+        with self._lock:
+            row = self._db.execute(
+                "SELECT value FROM settings WHERE key='ac_units'").fetchone()
+        if row is None:
+            return []
+        try:
+            return json.loads(row["value"])
+        except json.JSONDecodeError:
+            return []
+
+    def save_ac_units(self, units: list[dict]) -> None:
+        with self._lock:
+            self._db.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES ('ac_units', ?)",
+                (json.dumps(units),))
+            self._db.commit()
+
     def set_lock(self, until: datetime, reason: str) -> None:
         """Publish a phone lock the app applies on its next wake.
 

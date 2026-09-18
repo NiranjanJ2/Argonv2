@@ -18,6 +18,7 @@ from __future__ import annotations
 import base64
 import json
 import socket
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 GENERIC_KEY = b"a3K8Bx%2r8Y7#xDh"
@@ -25,6 +26,11 @@ GCM_KEY = b"{yxAHAY_Lm6pbC/<"
 GCM_IV = bytes.fromhex("5440784889c0d92e")
 GCM_AAD = b"qualcomm-test"
 PORT = 7000
+
+#: Where to look for units. Broadcast alone found one of three on his LAN — a
+#: /22 with client isolation on part of it — so the addresses of units already
+#: known are probed directly as well. Cheap: three extra UDP datagrams.
+BROADCASTS = ("255.255.255.255", "192.168.68.255", "192.168.71.255")
 
 #: Fields a unit accepts. Kept short: these are the ones he uses.
 FIELDS = {"power": "Pow", "mode": "Mod", "temp": "SetTem", "fan": "WdSpd",
@@ -77,9 +83,15 @@ class Unit:
     name: str = ""
     gcm: bool = False
 
-    def as_dict(self) -> dict:
-        return {"mac": self.mac, "host": self.host, "name": self.name,
-                "bound": bool(self.key), "gcm": self.gcm}
+    def as_dict(self, *, with_key: bool = False) -> dict:
+        """The unit as data. The key is left out unless asked for: this feeds
+        /v1/ac and the model's tool output, and neither needs the secret that
+        controls the appliance."""
+        out = {"mac": self.mac, "host": self.host, "name": self.name,
+               "bound": bool(self.key), "gcm": self.gcm}
+        if with_key:
+            out["key"] = self.key
+        return out
 
 
 @dataclass
@@ -101,14 +113,24 @@ class Gree:
             s.close()
         return json.loads(data.decode())
 
-    def scan(self, broadcast: str = "255.255.255.255") -> list[Unit]:
+    def scan(self, broadcast: str | None = None) -> list[Unit]:
         """Find units. Returns unbound entries; bind before commanding."""
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         s.settimeout(self.timeout)
         found: list[Unit] = []
+        # Every broadcast address, plus the last known address of each unit.
+        # A unit whose lease moved answers on neither the old address nor a
+        # broadcast that does not reach its segment, and asking both is the
+        # difference between "it moved" and "it is broken".
+        targets = [broadcast] if broadcast else list(BROADCASTS)
+        targets += [u.host for u in self.units.values() if u.host]
         try:
-            s.sendto(json.dumps({"t": "scan"}).encode(), (broadcast, PORT))
+            for target in targets:
+                try:
+                    s.sendto(json.dumps({"t": "scan"}).encode(), (target, PORT))
+                except OSError:
+                    continue
             while True:
                 try:
                     data, addr = s.recvfrom(65535)
@@ -160,8 +182,38 @@ class Gree:
         key = unit.key.encode()
         packet = {"cid": "app", "i": 0, "t": "pack", "uid": 0,
                   "tcid": mac, "pack": encrypt(body, key)}
-        reply = self._send(unit.host, packet)
+        try:
+            reply = self._send(unit.host, packet)
+        except ACError:
+            # The address is a DHCP lease and does move; the MAC is the
+            # identity. A unit that stops answering is re-found rather than
+            # declared broken — otherwise every lease renewal looks like a
+            # dead air conditioner and needs a human to re-pair it.
+            if not self.relocate(mac):
+                raise
+            packet["tcid"] = mac
+            reply = self._send(self.units[mac].host, packet)
         return decrypt(reply["pack"], key)
+
+    def relocate(self, mac: str) -> bool:
+        """Find a known unit at its new address. True if it moved and was found.
+
+        The bind key survives the move, so this is a lookup rather than a
+        re-pair: nothing the vendor app holds is disturbed.
+        """
+        unit = self.units.get(mac)
+        if unit is None:
+            return False
+        for found in self.scan():
+            if found.mac == mac and found.host != unit.host:
+                unit.host = found.host
+                self.on_change()
+                return True
+        return False
+
+    #: Set by the runtime to persist units after a bind or a relocation.
+    #: A no-op default keeps a bare Gree usable in a test.
+    on_change: Callable[[], None] = lambda: None
 
 
 def _selftest() -> None:

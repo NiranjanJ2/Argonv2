@@ -164,17 +164,21 @@ def cmd_google_auth(args) -> int:
 
 
 def cmd_ac(args) -> int:
-    from argon.integrations.ac import Gree
+    """Find, bind and remember. One command, because a unit that is found but
+    not bound cannot be commanded and a bind that is not saved is gone on the
+    next restart — which used to mean hand-copying keys into config.json."""
+    from argon import runtime
 
-    g = Gree()
-    units = g.scan()
-    if not units:
-        print("no units answered")
+    rt = runtime.Runtime()
+    out = rt.ac_adopt()
+    for line in out.get("failed", []):
+        print(f"could not bind {line}")
+    if not out.get("ok"):
+        print(out.get("error", "nothing bound"))
         return 1
-    for u in units:
-        bound = g.bind(u)
-        print(f"{bound.mac}  {bound.host}  {bound.name or '(unnamed)'}  key={bound.key}")
-    print("\nput these in ~/.argon2/config.json if you want them to persist")
+    for u in out["bound"]:
+        print(f"{u['mac']}  {u['host']}  {u['name'] or '(unnamed)'}")
+    print(f"\nremembered {len(out['bound'])} unit(s); they survive a restart now")
     return 0
 
 
@@ -201,7 +205,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("doctor", help="check what has broken before").set_defaults(fn=cmd_doctor)
     sub.add_parser("tick", help="run one tick now").set_defaults(fn=cmd_tick)
     sub.add_parser("applog", help="what the phone reported").set_defaults(fn=cmd_applog)
-    sub.add_parser("ac-scan", help="find and bind air conditioners").set_defaults(fn=cmd_ac)
+    sub.add_parser("ac-scan", help="find, bind and remember air conditioners"
+                   ).set_defaults(fn=cmd_ac)
 
     chat = sub.add_parser("chat", help="talk to Argon")
     chat.add_argument("message", nargs="*")

@@ -291,6 +291,51 @@ def create_app(rt) -> Flask:
                                                source="planner"))
         return jsonify({"added": [task_json(t) for t in added]})
 
+    @app.route("/v2/ac", methods=["GET", "POST"])
+    @require_token
+    def v2_ac():
+        """One URL an iOS Shortcut can call.
+
+        GET with query parameters rather than a JSON body, because that is what
+        Shortcuts builds without ceremony: "Get contents of URL", one header for
+        the token, and the settings in the address. A Shortcut should also not
+        have to carry a MAC, so `unit` accepts the name the air conditioner
+        reports for itself, and may be omitted when there is only one.
+
+        Returns a sentence as well as the fields. A Shortcut that speaks the
+        result, or shows a notification, then has something to say that is not
+        a JSON blob.
+        """
+        args = request.args if request.method == "GET" else (body() or {})
+        mac = rt.ac_find(str(args.get("unit", "")))
+        if mac is None:
+            known = ", ".join(u["name"] or u["mac"] for u in rt.ac_units())
+            return jsonify({"ok": False,
+                            "error": f"no such unit. Known: {known or 'none bound'}",
+                            "spoken": "No air conditioner by that name."}), 404
+
+        changes: dict[str, Any] = {}
+        for field in ("power", "temp", "mode", "fan", "swing", "light", "turbo", "quiet"):
+            if (raw := args.get(field)) not in (None, ""):
+                changes[field] = raw
+        # "on"/"off" because that is what a Shortcut's menu naturally produces.
+        if isinstance(changes.get("power"), str):
+            word = changes["power"].strip().lower()
+            if word in ("on", "true", "yes"):
+                changes["power"] = 1
+            elif word in ("off", "false", "no"):
+                changes["power"] = 0
+        if not changes:
+            unit = next(u for u in rt.ac_units() if u["mac"] == mac)
+            return jsonify({"ok": True, "unit": unit,
+                            "spoken": f"{unit['name'] or 'The unit'} is reachable."})
+
+        out = rt.ac_set(mac, changes)
+        if not out.get("ok"):
+            return jsonify({**out, "spoken": "The air conditioner did not answer."}), 502
+        said = ", ".join(f"{k} {v}" for k, v in changes.items())
+        return jsonify({**out, "unit": mac, "spoken": f"Set {said}."})
+
     @app.get("/v1/ac")
     @require_token
     def v1_ac_list():
