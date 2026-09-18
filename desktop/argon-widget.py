@@ -44,8 +44,13 @@ def call(path: str, method: str = "GET", body: dict | None = None) -> dict:
     req = urllib.request.Request(
         cfg["base"].rstrip("/") + path,
         data=json.dumps(body).encode() if body is not None else None,
+        # A real User-Agent. urllib sends "Python-urllib/3.x" by default and
+        # Cloudflare answers that with 403 before the request ever reaches the
+        # tunnel — so the widget read "unreachable" while curl, from the same
+        # machine with the same token, got a 200.
         headers={"Authorization": f"Bearer {cfg['token']}",
-                 "Content-Type": "application/json"},
+                 "Content-Type": "application/json",
+                 "User-Agent": "Argon-Widget/2 (macOS)"},
         method=method,
     )
     with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
