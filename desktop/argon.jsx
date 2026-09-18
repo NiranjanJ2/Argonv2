@@ -18,6 +18,11 @@ export const refreshFrequency = 20000;
 
 const sh = (s) => "'" + String(s).replace(/'/g, "'\\''") + "'";
 
+// Module scope, not React state. Übersicht re-invokes render on every poll, so
+// anything held in component state snaps shut every twenty seconds; a module
+// variable outlives the render because the module is only loaded once.
+let laterOpen = false;
+
 // Dim on click; the next poll replaces the DOM with the truth, which is exactly
 // when the dimming should stop, so nothing has to undo it.
 const act = (event, ...args) => {
@@ -77,6 +82,16 @@ export const className = `
   .btn:hover { background: rgba(255,255,255,0.10); }
   .btn.stop { border-color: rgba(255,107,107,0.45); color: #FF8F8F; opacity: 0.9; }
 
+  .more { font-size: 10.5px; opacity: 0.6; cursor: pointer; padding: 8px 0 4px;
+          user-select: none; letter-spacing: 0.2px; }
+  .more:hover { opacity: 0.95; color: #83C2FF; }
+  .chev { display: inline-block; width: 12px; opacity: 0.8; }
+
+  /* Collapsed by default. The header stays, so the work is never hidden —
+     only folded, and the count says how much is behind it. */
+  .laterList { display: none; }
+  .open > .laterList { display: block; }
+
   .empty { font-size: 12px; opacity: 0.5; padding: 10px 0 4px; }
   .err { font-size: 11px; color: #FF8F8F; padding-top: 6px; line-height: 1.45; }
 `;
@@ -94,9 +109,31 @@ export const render = ({ output }) => {
 
   const running = view.tasks.find((t) => t.started);
   const rest = view.tasks.filter((t) => !t.started);
+  // Tonight is what he can still act on today; everything dated further out is
+  // real work but not this evening's, and listing it all made the panel a wall
+  // he stopped reading.
+  const isTonight = (t) =>
+    t.due === "overdue" || t.due === "today" || t.due === "tomorrow";
+  const tonight = rest.filter(isTonight);
+  const later = rest.filter((t) => !isTonight(t));
+
+  const taskRow = (t) => (
+    <div className="row" key={t.id}>
+      <div className="tick" onClick={(e) => act(e, "complete", t.id)} />
+      <div className="body" onClick={(e) => act(e, "start", t.id)}>
+        <div className="title">{t.title}</div>
+        {t.subject && <div className="subject">{t.subject}</div>}
+      </div>
+      <div className={"due " + (t.due === "overdue" ? "overdue"
+                              : t.due === "today" ? "today" : "")}>
+        {t.due}
+      </div>
+      <div className="btn" onClick={(e) => act(e, "start", t.id)}>Start</div>
+    </div>
+  );
 
   return (
-    <div>
+    <div className={laterOpen ? "open" : ""}>
       <h1>{view.title}</h1>
       {view.lines.map((line, i) => <div className="meta" key={i}>{line}</div>)}
 
@@ -113,21 +150,29 @@ export const render = ({ output }) => {
 
       <div className="sep" />
 
-      {rest.length === 0 && <div className="empty">Nothing else open</div>}
-      {rest.map((t) => (
-        <div className="row" key={t.id}>
-          <div className="tick" onClick={(e) => act(e, "complete", t.id)} />
-          <div className="body" onClick={(e) => act(e, "start", t.id)}>
-            <div className="title">{t.title}</div>
-            {t.subject && <div className="subject">{t.subject}</div>}
-          </div>
-          <div className={"due " + (t.due === "overdue" ? "overdue"
-                                  : t.due === "today" ? "today" : "")}>
-            {t.due}
-          </div>
-          <div className="btn" onClick={(e) => act(e, "start", t.id)}>Start</div>
+      {tonight.length === 0 && <div className="empty">Nothing due tonight</div>}
+      {tonight.map(taskRow)}
+
+      {later.length > 0 && (
+        <div
+          className="more"
+          onClick={(e) => {
+            // Flip and repaint now rather than waiting for the next poll —
+            // twenty seconds is a long time to wonder whether a click landed.
+            laterOpen = !laterOpen;
+            const box = e.currentTarget.parentNode;
+            box.classList.toggle("open", laterOpen);
+            const chev = e.currentTarget.querySelector(".chev");
+            if (chev) chev.textContent = laterOpen ? "▾" : "▸";
+          }}
+        >
+          <span className="chev">{laterOpen ? "▾" : "▸"}</span>
+          Later — {later.length} not due tonight
         </div>
-      ))}
+      )}
+      {later.length > 0 && (
+        <div className="laterList">{later.map(taskRow)}</div>
+      )}
     </div>
   );
 };

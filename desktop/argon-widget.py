@@ -26,7 +26,7 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 CONFIG = Path.home() / ".argon-widget.json"
@@ -101,7 +101,17 @@ def _due_label(due: str | None, today: str) -> str:
         return "overdue"
     if day == today:
         return "today"
+    # Tomorrow is tonight's work. He does homework the evening before it is
+    # collected, so folding "due tomorrow" in with next week's reading hides
+    # the thing he is actually about to sit down to.
+    if day == _tomorrow(today):
+        return "tomorrow"
     return day[5:]  # MM-DD
+
+
+def _tomorrow(today: str) -> str:
+    return (datetime.strptime(today, "%Y-%m-%d")
+            + timedelta(days=1)).strftime("%Y-%m-%d")
 
 
 def build_view(state: dict, *, now: datetime | None = None) -> dict:
@@ -122,14 +132,19 @@ def build_view(state: dict, *, now: datetime | None = None) -> dict:
     overdue = [t for t in tasks if (t.get("due") or "")[:10] < today and t.get("due")]
     started = [t for t in tasks if t.get("started_at")]
 
+    # State first, count second. "argon 2!" told him a number without telling
+    # him what it was a number of, and said nothing at all about whether he was
+    # working — which is the one thing a menu bar is for.
+    tonight = [t for t in tasks
+               if _due_label(t.get("due"), today) in ("overdue", "today", "tomorrow")]
     if started:
         title = f"▶ {started[0]['title'][:24]}"
-    elif overdue:
-        title = f"argon {len(overdue)}!"
+    elif tonight:
+        title = f"Idle · {len(tonight)} tonight"
     elif tasks:
-        title = f"argon {len(tasks)}"
+        title = f"Idle · {len(tasks)} open"
     else:
-        title = "argon ✓"
+        title = "Idle · clear"
 
     lines = []
     school = state.get("school") or {}
@@ -231,7 +246,7 @@ def selftest() -> None:
     assert v["ok"] and [t["id"] for t in v["tasks"]] == ["a", "b", "c", "d"], v["tasks"]
     assert v["tasks"][0]["due"] == "overdue" and v["tasks"][1]["due"] == "today"
     assert v["tasks"][2]["due"] == "09-20" and v["tasks"][3]["due"] == ""
-    assert v["title"] == "argon 1!", v["title"]
+    assert v["title"] == "Idle · 2 tonight", v["title"]
     assert "2 unread" in v["lines"] and "$0.29 of $5 this month" in v["lines"]
 
     # A started task takes the title over an overdue count.
@@ -241,7 +256,16 @@ def selftest() -> None:
 
     # Nothing open reads as done, not as an error.
     v = build_view({"tasks": [], "ticking": False, "budget": {}}, now=now)
-    assert v["title"] == "argon ✓" and "not watching right now" in v["lines"]
+    assert v["title"] == "Idle · clear" and "not watching right now" in v["lines"]
+
+    # The title says what he is doing before it says how much there is. A bare
+    # count ("argon 2!") is a number with no noun and no state.
+    late_only = build_view({"tasks": [{"id": "a", "title": "Late", "due": "2026-09-01"}]},
+                           now=now)
+    assert late_only["title"] == "Idle · 1 tonight", late_only["title"]
+    ahead = build_view({"tasks": [{"id": "z", "title": "Later", "due": "2026-09-30"}]},
+                       now=now)
+    assert ahead["title"] == "Idle · 1 open", ahead["title"]
 
     out = render_swiftbar(build_view(state, now=now))
     assert out.splitlines()[1] == "---" and "param2=complete" in out
