@@ -153,6 +153,13 @@ final class ArgonStore {
     await enqueue(.start(taskID: task.id))
   }
 
+  /// He put it down. Drops the shield that starting it raised, without
+  /// claiming the work is finished.
+  func stop(_ task: ArgonTask) async {
+    apply(.stop(taskID: task.id))
+    await enqueue(.stop(taskID: task.id))
+  }
+
   func complete(_ task: ArgonTask) async {
     apply(.complete(taskID: task.id))
     await enqueue(.complete(taskID: task.id))
@@ -220,6 +227,9 @@ final class ArgonStore {
     case .start(let id):
       guard let i = state.tasks.firstIndex(where: { $0.id == id }) else { return }
       state.tasks[i].startedAt = ISO8601DateFormatter().string(from: Date())
+    case .stop(let id):
+      guard let i = state.tasks.firstIndex(where: { $0.id == id }) else { return }
+      state.tasks[i].startedAt = nil
     case .complete(let id):
       guard let i = state.tasks.firstIndex(where: { $0.id == id }) else { return }
       state.tasks[i].done = true

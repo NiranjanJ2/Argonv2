@@ -46,6 +46,11 @@ AGENDA_TTL_MINUTES = 10
 #: not a warning — and short enough that it is not just the day's agenda.
 EVENT_URGENT_MINUTES = 30
 
+#: How long a lock raised by starting a task may last. He presses done long
+#: before this; the cap is only so a task started and forgotten cannot shut his
+#: phone overnight.
+TASK_LOCK_HOURS = 4
+
 
 def system_prompt() -> str:
     """Static for the whole day, so it caches.
@@ -344,6 +349,41 @@ class Runtime:
     def device_token(self) -> str:
         p = config.home() / "device_token"
         return p.read_text().strip() if p.exists() else ""
+
+    def begin_task(self, tid: str) -> object | None:
+        """He started this: mark it, and put the shield up.
+
+        Starting work and blocking distractions were two separate actions, so
+        in practice the second one never happened — the block was a thing he
+        had to remember to ask for at exactly the moment he had decided to stop
+        thinking about his phone. One tap now does both.
+
+        The lock is capped rather than open-ended. A task he starts and forgets
+        must not lock him out overnight, and the cap is what makes "until I
+        press done" safe to offer.
+        """
+        task = self.store.start_task(tid)
+        if task is None:
+            return None
+        until = clock.now() + timedelta(hours=TASK_LOCK_HOURS)
+        self.store.set_lock(until, f"working on {task.title}"[:120])
+        self.wake_phone("task started")
+        return task
+
+    def end_task(self, tid: str, *, done: bool) -> object | None:
+        """Done with it, or putting it down. Either way the shield comes off."""
+        task = (self.store.complete_task(tid, by="him") if done
+                else self.store.stop_task(tid))
+        if task is None:
+            return None
+        # Only lift a lock that this task raised. He may have asked for a
+        # lock-in separately, and finishing one assignment is not a reason to
+        # unblock his phone for the rest of the evening.
+        live = self.store.lock()
+        if live is not None and live[1] == f"working on {task.title}"[:120]:
+            self.store.clear_lock("the task it was raised for ended")
+        self.wake_phone("task ended")
+        return task
 
     def wake_phone(self, why: str) -> bool:
         """Push the phone to reconcile now, instead of waiting to be opened.

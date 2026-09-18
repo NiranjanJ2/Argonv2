@@ -243,6 +243,27 @@ class Store:
         self._t.append("task_started", id=tid, summary=title)
         return self.task(tid)
 
+    def stop_task(self, tid: str) -> Task | None:
+        """He put it down without finishing it. Clears the start, keeps the task.
+
+        Distinct from completing it on purpose: "I am not working on this any
+        more" and "this is done" are different claims, and only he can make
+        either. Without a stop, the only way out of a started task was to
+        finish it, which is how a task started on Tuesday was still "in
+        progress" on Friday.
+        """
+        with self._lock:
+            row = self._db.execute(
+                "SELECT * FROM tasks WHERE id=? AND started_at IS NOT NULL",
+                (tid,)).fetchone()
+            if row is None:
+                return None
+            self._db.execute("UPDATE tasks SET started_at=NULL WHERE id=?", (tid,))
+            self._db.commit()
+            title = row["title"]
+        self._t.append("task_stopped", id=tid, summary=title)
+        return self.task(tid)
+
     def complete_task(self, tid: str, *, by: str = "him") -> Task | None:
         """Mark done. Guard and write share one lock, so two concurrent
         completes cannot both pass and log the task twice.

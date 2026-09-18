@@ -179,14 +179,21 @@ def create_app(rt) -> Flask:
     @require_token
     def v1_update_task(task_id: str):
         data = body()
+        # Start and stop go through the runtime, not the store: beginning a
+        # task also raises the shield and ending it lowers it, and a caller
+        # that reached past that would block or unblock nothing.
         if data.get("done") is True:
-            t = rt.store.complete_task(task_id)
+            t = rt.end_task(task_id, done=True)
             return (jsonify({"task": task_json(t)}) if t
                     else (jsonify({"error": "no such open task"}), 404))
         if data.get("started") is True:
-            t = rt.store.start_task(task_id)
+            t = rt.begin_task(task_id)
             return (jsonify({"task": task_json(t)}) if t
                     else (jsonify({"error": "already started"}), 409))
+        if data.get("started") is False:
+            t = rt.end_task(task_id, done=False)
+            return (jsonify({"task": task_json(t)}) if t
+                    else (jsonify({"error": "not started"}), 409))
         # Every field through text_field: a dict here reached sqlite3 and
         # raised "type 'dict' is not supported" as a 500.
         t = rt.store.update_task(task_id,

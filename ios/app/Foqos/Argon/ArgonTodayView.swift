@@ -83,12 +83,25 @@ struct ArgonTodayView: View {
                 .font(Argon.detail)
                 .foregroundStyle(Argon.Tone.secondary)
             }
+            if store.state.lock?.isLive == true {
+              Label("Apps blocked", systemImage: "shield.lefthalf.filled")
+                .font(Argon.label)
+                .foregroundStyle(Argon.accentSoft)
+            }
           }
           Spacer(minLength: 8)
-          Button("Done") { Task { await store.complete(started) } }
-            .font(Argon.heading)
-            .foregroundStyle(Argon.running)
-            .buttonStyle(.plain)
+          // Stop and Done are different claims — "not working on this now" and
+          // "this is finished" — and only he can make either. With Done alone
+          // the only way out of a started task was to declare it complete.
+          VStack(spacing: 10) {
+            Button("Done") { Task { await store.complete(started) } }
+              .font(Argon.heading)
+              .foregroundStyle(Argon.running)
+            Button("Stop") { Task { await store.stop(started) } }
+              .font(Argon.detail)
+              .foregroundStyle(Argon.Tone.secondary)
+          }
+          .buttonStyle(.plain)
         }
       }
     } else if !store.state.ticking {

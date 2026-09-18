@@ -13,6 +13,7 @@ import Foundation
 struct PendingWrite: Codable, Identifiable, Equatable {
   enum Kind: Codable, Equatable {
     case start(taskID: String)
+    case stop(taskID: String)
     case complete(taskID: String)
     case add(title: String, due: String?)
     case say(text: String)
@@ -38,6 +39,7 @@ struct PendingWrite: Codable, Identifiable, Equatable {
   var describedForHim: String {
     switch kind {
     case .start(let id): return "starting a task (\(id.prefix(6)))"
+    case .stop(let id): return "stopping a task (\(id.prefix(6)))"
     case .complete(let id): return "completing a task (\(id.prefix(6)))"
     case .add(let title, _): return "adding “\(title)”"
     case .say(let text): return "sending “\(text.prefix(30))”"

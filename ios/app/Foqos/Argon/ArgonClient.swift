@@ -137,6 +137,8 @@ actor ArgonClient {
     switch write.kind {
     case .start(let id):
       _ = try await request("v1/tasks/\(id)", method: "PATCH", body: ["started": true])
+    case .stop(let id):
+      _ = try await request("v1/tasks/\(id)", method: "PATCH", body: ["started": false])
     case .complete(let id):
       _ = try await request("v1/tasks/\(id)", method: "PATCH", body: ["done": true])
     case .add(let title, let due):

@@ -171,7 +171,11 @@ def render_swiftbar(view: dict) -> str:
         mark = "▶ " if t["started"] else ""
         label = f"{mark}{t['title']}" + (f"  ({t['due']})" if t["due"] else "")
         out.append(label)
-        for verb, text in (("start", "Start"), ("complete", "Done")):
+        # A running task offers Stop; a waiting one offers Start. Showing both
+        # on both invites the wrong one at the moment he is trying to stop.
+        verbs = (("stop", "Stop"), ("complete", "Done")) if t["started"] \
+            else (("start", "Start"), ("complete", "Done"))
+        for verb, text in verbs:
             out.append(f"--{text} | bash={me} param1=--do param2={verb} "
                        f"param3={t['id']} terminal=false refresh=true")
     out.append("---")
@@ -190,6 +194,10 @@ def do(verb: str, task_id: str = "") -> str:
         return str(call(f"/v1/tasks/{task_id}", "PATCH", {"started": True}))
     if verb == "complete":
         return str(call(f"/v1/tasks/{task_id}", "PATCH", {"done": True}))
+    if verb == "stop":
+        # Putting it down is not finishing it. Sends started=false, which drops
+        # the shield the start raised without claiming the work is done.
+        return str(call(f"/v1/tasks/{task_id}", "PATCH", {"started": False}))
     if verb == "add":
         script = 'display dialog "New task" default answer ""'
         r = subprocess.run(["osascript", "-e", script], capture_output=True, text=True)
