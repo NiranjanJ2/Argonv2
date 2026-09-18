@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import pathlib
 import subprocess
 import sys
 import urllib.error
@@ -34,9 +35,28 @@ TIMEOUT = 4.0
 
 def config() -> dict:
     if CONFIG.exists():
-        return json.loads(CONFIG.read_text())
+        try:
+            return json.loads(CONFIG.read_text())
+        except (OSError, json.JSONDecodeError) as e:
+            # Falling through to the env default silently is how a widget ends
+            # up reporting a DNS failure for a host nobody configured.
+            _trace(f"config unreadable: {e!r}")
     return {"base": os.environ.get("ARGON_BASE", "http://localhost:3995"),
             "token": os.environ.get("ARGON_TOKEN", "")}
+
+
+def _trace(line: str) -> None:
+    """One line into ~/.argon/widget.log.
+
+    The host runs this, not a terminal: when SwiftBar or Übersicht shows an
+    error there is no way to ask the process what it tried. This is how the
+    widget's own run gets inspected afterwards instead of guessed at.
+    """
+    try:
+        with (pathlib.Path.home() / ".argon" / "widget.log").open("a") as f:
+            f.write(f"{datetime.now():%F %T} {line}\n")
+    except OSError:
+        pass
 
 
 def call(path: str, method: str = "GET", body: dict | None = None) -> dict:
@@ -58,10 +78,17 @@ def call(path: str, method: str = "GET", body: dict | None = None) -> dict:
 
 
 def fetch() -> dict:
+    base = config().get("base", "?")
     try:
-        return call("/v2/state")
+        state = call("/v2/state")
     except (urllib.error.URLError, TimeoutError, OSError) as e:
-        return {"error": str(e)}
+        # Name the host in the message. "nodename nor servname provided" says
+        # a lookup failed but not what was looked up, which is useless when the
+        # widget is configured somewhere you are not looking.
+        _trace(f"FAIL base={base} argv={sys.argv[1:]} py={sys.executable} err={e!r}")
+        return {"error": f"{e} [{base}]"}
+    _trace(f"ok base={base} argv={sys.argv[1:]}")
+    return state
 
 
 # -- what the readout says --------------------------------------------------
