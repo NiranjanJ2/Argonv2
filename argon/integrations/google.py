@@ -652,23 +652,19 @@ def tidy_course(name: str) -> str:
 def classroom_due(coursework: dict[str, Any]) -> datetime | None:
     """Local due datetime of a courseWork item, or None if it has no deadline.
 
-    The date comes from ``dueDate`` verbatim; only the *time of day* comes from
-    ``dueTime`` converted out of UTC. The two fields are not one instant, and
-    treating them as one is the bug that put Math a day early on his board.
+    ``dueDate`` and ``dueTime`` are one instant in UTC, converted to local.
+    That is what the API documents and, more usefully, what his Classroom
+    actually shows: "Chapter 6 Key terms" comes back as
+    ``dueDate=2026-09-18, dueTime=06:59Z`` and Classroom displays it as due
+    **Sep 17, 11:59 PM** — 06:59Z is 23:59 the previous day in Pacific.
 
-    Google documents both as UTC, and ``dueTime`` genuinely is — 06:59Z is a
-    teacher setting 11:59 PM, not a 6:59 AM deadline. But ``dueDate`` is stored
-    as the day the teacher picked, unconverted, and that is the day Classroom
-    shows him. So HW 21 arrives as ``dueDate=2026-09-18, dueTime=06:59Z`` and
-    Classroom displays "Due Sep 18, 11:59 PM".
+    Reading the date from ``dueDate`` and only the clock from ``dueTime``
+    reconstructs "Sep 18, 11:59 PM", which is a day late and was wrong on every
+    timed assignment. The two fields are not independent; 06:59Z only looks
+    like an odd hour because it is midnight somewhere else.
 
-    Reading the pair as a single UTC instant gives Sep 17 23:59 — one day
-    earlier than both the teacher and the app he checks. Verified against his
-    own Classroom: it says Sep 18. Taking the date from one field and the clock
-    from the other reconstructs exactly what he sees.
-
-    With no ``dueTime`` there is no official instant; local end-of-day is only
-    a work-by fallback.
+    With no ``dueTime`` there is no official instant, so local end-of-day is a
+    work-by fallback — and *that* one is a bare calendar date, not UTC.
     """
     due_date = coursework.get("dueDate")
     if not due_date:
@@ -678,15 +674,12 @@ def classroom_due(coursework: dict[str, Any]) -> datetime | None:
         if due_time is None:
             return datetime(due_date["year"], due_date["month"], due_date["day"],
                             23, 59, tzinfo=clock.TZ)
-        # Convert the clock, keep the calendar. The offset is taken on the
-        # assignment's own date, not a fixed one: a January reference put every
-        # September deadline an hour out, because Pacific is PST then and PDT
-        # now. Only the resulting hour and minute are used.
-        wall = datetime(due_date["year"], due_date["month"], due_date["day"],
-                        due_time.get("hours", 0), due_time.get("minutes", 0),
-                        tzinfo=UTC).astimezone(clock.TZ)
-        return datetime(due_date["year"], due_date["month"], due_date["day"],
-                        wall.hour, wall.minute, tzinfo=clock.TZ)
+        return datetime(
+            due_date["year"], due_date["month"], due_date["day"],
+            due_time.get("hours", 0), due_time.get("minutes", 0),
+            due_time.get("seconds", 0), due_time.get("nanos", 0) // 1000,
+            tzinfo=UTC,
+        ).astimezone(clock.TZ)
     except (KeyError, TypeError, ValueError):
         return None
 
@@ -744,6 +737,25 @@ def _selftest() -> None:
 
     with tempfile.TemporaryDirectory() as tmp:
         os.environ["ARGON_HOME"] = tmp
+
+        # Ground truth from his own Classroom, which this got wrong twice in
+        # both directions. "Chapter 6 Key terms" is dueDate=2026-09-18 with
+        # dueTime=06:59Z and Classroom shows it as due Sep 17, 11:59 PM.
+        chapter6 = {"dueDate": {"year": 2026, "month": 9, "day": 18},
+                    "dueTime": {"hours": 6, "minutes": 59}}
+        assert classroom_due(chapter6).strftime("%Y-%m-%d %H:%M") == "2026-09-17 23:59", \
+            "dueDate+dueTime is one UTC instant, not a local date plus a clock"
+
+        # An 08:30 local deadline stays on its own day — the conversion must not
+        # shift everything back by a day to make the midnight case work.
+        review = {"dueDate": {"year": 2026, "month": 9, "day": 18},
+                  "dueTime": {"hours": 15, "minutes": 30}}
+        assert classroom_due(review).strftime("%Y-%m-%d %H:%M") == "2026-09-18 08:30"
+
+        # No dueTime is a bare calendar date, so end-of-day *local*.
+        undated = {"dueDate": {"year": 2026, "month": 9, "day": 20}}
+        assert classroom_due(undated).strftime("%Y-%m-%d %H:%M") == "2026-09-20 23:59"
+        assert classroom_due({}) is None
 
         assert format_events([]) == "Nothing on the calendar."
         line = format_events([{"summary": "Lab", "start": {"dateTime": "2026-09-14T15:00:00-07:00"}}])
