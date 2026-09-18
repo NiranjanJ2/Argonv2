@@ -7,7 +7,22 @@ struct ArgonTodayWidget: Widget {
   var body: some WidgetConfiguration {
     StaticConfiguration(kind: "ArgonToday", provider: ArgonTodayProvider()) { entry in
       ArgonTodayWidgetView(snapshot: entry.snapshot)
-        .containerBackground(for: .widget) { ArgonWidgetPalette.canvas }
+        // Glass rather than a painted panel. `.fill.tertiary` is the system's
+        // adaptive widget material: it picks up the wallpaper behind it and
+        // follows the home screen's own tinting, which a solid colour fights.
+        // The gradient over it is what keeps it Argon's blue instead of a
+        // generic grey pane — low enough opacity that the wallpaper still
+        // reads through.
+        .containerBackground(for: .widget) {
+          Rectangle()
+            .fill(.fill.tertiary)
+            .overlay {
+              LinearGradient(
+                colors: [ArgonWidgetPalette.accent.opacity(0.28),
+                         ArgonWidgetPalette.accent.opacity(0.06)],
+                startPoint: .topLeading, endPoint: .bottomTrailing)
+            }
+        }
     }
     .configurationDisplayName("Argon")
     .description("What's due, and whether Argon is watching.")

@@ -62,6 +62,11 @@ final class ArgonStore {
       messages = snapshot.messages
       cachedAt = snapshot.at
       connection = .stale(at: snapshot.at, why: "cached")
+      // The widget only ever got a snapshot after a *successful network read*,
+      // so a phone that could not reach the server — which was every phone off
+      // the house network — left it showing "Open the app" forever. Cached
+      // state is still state; the widget can say what it last knew.
+      ArgonSnapshot.from(state: state).save()
     }
   }
 
