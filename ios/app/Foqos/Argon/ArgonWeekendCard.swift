@@ -18,6 +18,7 @@ struct ArgonWeekendCard: View {
   @State private var picking = false
   @State private var selection = FamilyActivitySelection()
   @State private var busy = false
+  @State private var error: String?
 
   private var isOn: Bool { bridge.desiredMode == "weekend" }
 
@@ -37,6 +38,12 @@ struct ArgonWeekendCard: View {
         }
         .tint(Argon.accent)
         .disabled(busy)
+
+        if let error {
+          Label(error, systemImage: "exclamationmark.triangle.fill")
+            .font(Argon.label).foregroundStyle(Argon.overdue)
+            .fixedSize(horizontal: false, vertical: true)
+        }
 
         if isOn {
           ArgonDivider()
@@ -93,12 +100,45 @@ struct ArgonWeekendCard: View {
     return n == 0 ? "Same as \(bridge.profileName)" : "\(n) selected"
   }
 
+  /// Apply it here, then tell the server.
+  ///
+  /// The toggle used to only call setFocusMode, which POSTs the mode and
+  /// nothing more — the server records it as an observation and takes no
+  /// action, because blocking happens on the device. applyArgonMeteredMode
+  /// existed the whole time and had no caller anywhere in the app, so the
+  /// switch moved, the server learned about it, and not one app was ever
+  /// metered.
+  ///
+  /// On-device first and reported second, so a server that is unreachable does
+  /// not stop the shield he just asked for.
   private func set(_ mode: String) {
     busy = true
+    let wanted = mode == "weekend"
+    do {
+      if wanted {
+        try StrategyManager.shared.applyArgonMeteredMode(
+          profileName: bridge.profileName,
+          minutes: minutes,
+          perHours: 1,
+          context: container.mainContext)
+      } else {
+        StrategyManager.shared.applyArgonUnlock(context: container.mainContext)
+      }
+      error = nil
+      ArgonLog.note("weekend", "\(wanted ? "on" : "off") — \(minutes)m/hour applied")
+    } catch {
+      // Say so rather than leaving the switch looking on. The commonest cause
+      // is no profile yet, which setup creates — and which he can only fix if
+      // he is told.
+      self.error = error.localizedDescription
+      ArgonLog.note("weekend", "failed: \(error.localizedDescription)")
+      busy = false
+      return
+    }
     Task {
       await bridge.setFocusMode(mode,
-                                allowanceMinutes: mode == "weekend" ? minutes : nil,
-                                perHours: mode == "weekend" ? 1 : nil)
+                                allowanceMinutes: wanted ? minutes : nil,
+                                perHours: wanted ? 1 : nil)
       busy = false
     }
   }
