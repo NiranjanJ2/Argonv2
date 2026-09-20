@@ -151,6 +151,16 @@ class Agent:
         text = strip_ids((text or "").strip())
         if not text:
             return "Error: empty message not sent"
+        # An invented absence is the one error he cannot catch: an invented
+        # task he notices, an invented "nothing due" he does not. The prompt
+        # has forbidden this from the first draft and on 20 Sep it still said
+        # APUSH had only two past reminders while two live APUSH tasks sat in
+        # the board it had been handed. Checked against the board instead.
+        if (missed := unmentioned_live_work(text, self.store.tasks())):
+            listed = "; ".join(f"{t.title} ({t.subject}) due {t.due}" for t in missed[:6])
+            return ("Error: not sent. That says nothing is there, but the board "
+                    f"has: {listed}. Either name this work or drop the claim. "
+                    "Do not tell him something is absent that the board lists.")
         if getattr(self, "_background", False):
             if self._went_quiet:
                 return ("Error: you called stand_down this turn. Going quiet is "
@@ -293,6 +303,60 @@ def strip_ids(text: str) -> str:
     return text.strip()
 
 
+
+#: Phrases that claim nothing is there. Deliberately narrow: these are the
+#: shapes an invented absence actually took, not every possible negation.
+_ABSENCE = re.compile(
+    r"\b(?:nothing\s+(?:is\s+)?(?:due|open|outstanding|else|left|showing|scheduled)"
+    r"|no\s+(?:other|further|more)\s+\w+"
+    r"|the\s+only\s+\w+"
+    r"|no\s+\w{0,12}\s*(?:assignments?|homework|work|tasks?)\s+(?:due|showing|open|left)?"
+    r"|none\s+(?:due|open|outstanding))\b", re.I)
+
+#: Words too common to identify a task by.
+_STOPWORDS = frozenset("""the a an and or of for to in on at by with from your his
+    due today tomorrow night reminder reminders study read watch complete finish
+    chapter ch unit part page pages""".split())
+
+
+def _keywords(text: str) -> set[str]:
+    return {w for w in re.findall(r"[0-9a-z\u3000-\u9fff]{2,}", text.lower())
+            if w not in _STOPWORDS}
+
+
+def unmentioned_live_work(text: str, tasks: list) -> list:
+    """Live tasks a message denies by omission.
+
+    Returns tasks whose *subject* the message names while claiming an absence,
+    and whose own title it never mentions. A message that names the work is
+    fine however it is phrased; a message that says "the only APUSH items are
+    two past reminders" while APUSH has two live ones is not.
+    """
+    if not _ABSENCE.search(text):
+        return []
+    said = _keywords(text)
+    missed = []
+    for t in tasks:
+        subject = (getattr(t, "subject", "") or "").strip()
+        if not subject:
+            continue
+        # Only judge subjects he is being told about. A brief that omits a
+        # class entirely is a different question, and not one a regex should
+        # be deciding.
+        subject_words = _keywords(subject)
+        if not subject_words or not (subject_words & said):
+            continue
+        title_words = _keywords(getattr(t, "title", "") or "")
+        if not title_words:
+            continue
+        # Half the distinctive words is enough: he is told "Inquizitive Ch 6"
+        # for a task titled "Reminder:  Inquizitive Ch 6 due tonight!".
+        hit = len(title_words & said)
+        if hit * 2 < len(title_words):
+            missed.append(t)
+    return missed
+
+
 def _selftest() -> None:
     """Run with ``python -m argon.agent``.  Uses a fake provider, no network."""
     import os
@@ -425,6 +489,31 @@ def _selftest() -> None:
     # Going quiet is the action; announcing it is not going quiet.
     a2._went_quiet = True
     assert a2.say("standing down for tonight").startswith("Error")
+
+    # An invented absence is the error he cannot catch. These are the real
+    # message from 20 Sep and the answers that must still get through.
+    class _T:
+        def __init__(self, title, subject, due):
+            self.title, self.subject, self.due = title, subject, due
+
+    apush = [_T("Reminder:  Inquizitive Ch 6 due tonight! ", "APUSH PM", "2026-09-20"),
+             _T("Key Terms Chapter 7", "APUSH PM", "2026-09-23")]
+
+    assert unmentioned_live_work(
+        "APUSH has nothing due tomorrow — the only APUSH Classroom items are two "
+        "past reminders (InQuizitive due 2026-09-07 and progress checks due "
+        "2026-09-09)", apush), "the message that actually went out must be refused"
+
+    assert not unmentioned_live_work(
+        "APUSH open items: Inquizitive Ch 6 due today; Key Terms Chapter 7 due "
+        "Wed 2026-09-23. No other APUSH tasks show.", apush), \
+        "naming the work is fine however it is phrased"
+
+    assert not unmentioned_live_work("Chemistry has nothing due this week.", apush), \
+        "a class with no live work may be reported as empty"
+    assert not unmentioned_live_work("Nothing else due tonight.", apush), \
+        "a general absence naming no class is not judged here"
+    assert not unmentioned_live_work("Key Terms Chapter 7 is due Wednesday.", apush)
 
     # Ids are stripped in code because the prompt rule did not hold.
     assert strip_ids("HW 18 — task id ee4723185a15. Nothing else.") \
