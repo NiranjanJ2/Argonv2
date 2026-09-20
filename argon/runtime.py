@@ -254,7 +254,30 @@ class Runtime:
 
     def receive(self, text: str, *, source: str = "ios") -> object:
         self.transcript.append("message_in", text=text, source=source)
+        self.sync_if_stale()
         return self.turn(background=False)
+
+    def sync_if_stale(self) -> None:
+        """Refresh Classroom before answering him, if it has been a while.
+
+        Syncing used to happen only inside tick_once, which is gated to the
+        evening window and skips Friday night, Saturday and Sunday morning. So
+        the board froze from Friday evening until Sunday afternoon, and on
+        Sunday morning he was told what was due using a board last written on
+        Wednesday night — "Key Terms Chapter 7" had been assigned in between
+        and did not exist as far as Argon was concerned.
+
+        He can ask at any hour; the board has to be current when he does. The
+        scheduler decides when Argon *speaks*, never how fresh the facts are.
+        """
+        last = self._last_classroom_sync
+        if last is not None and (
+                clock.now() - last).total_seconds() <= CLASSROOM_SYNC_MINUTES * 60:
+            return
+        try:
+            self.sync_classroom()
+        except Exception as e:  # noqa: BLE001 - a bad sync must not eat his message
+            self.transcript.append("classroom_sync_failed", summary=repr(e)[:200])
 
     def receive_async(self, text: str, *, source: str = "ios") -> int:
         """Record his message, answer on a worker, return the transcript seq.
@@ -271,6 +294,7 @@ class Runtime:
         seq = self.transcript.append("message_in", text=text, source=source)
 
         def answer() -> None:
+            self.sync_if_stale()
             try:
                 self.turn(background=False)
             except Exception as e:  # noqa: BLE001 - a worker must not die silently
@@ -519,6 +543,19 @@ class Runtime:
         if refused:
             note += f" (could not read: {', '.join(refused)})"
         self.transcript.append("classroom_sync", summary=note)
+        # Hand back the board it just produced, not only a count.
+        #
+        # The prompt's copy of the board is built once, at the start of the
+        # turn. A sync called *during* the turn updates the store and changes
+        # nothing the model can see, so on 20 Sep it synced, was told "5 added",
+        # and then answered from the pre-sync board — reporting that APUSH had
+        # nothing but two stale reminders while "Key Terms Chapter 7" sat in the
+        # rows it had just written. The tool result is the only place fresh
+        # state can reach it mid-turn, so the rows go here.
+        board = "\n".join(f"- {t.line()}" for t in self.store.tasks()[:BOARD_LIMIT])
+        if board:
+            note += ("\n\nThe board now reads, and this supersedes the list "
+                     "earlier in this conversation:\n" + board)
         return note
 
     def remember_discord_channel(self, channel_id: str) -> None:
@@ -1057,6 +1094,26 @@ def _selftest() -> None:
         assert "REPORT TO HIM:" in unavailable and "NOT FOR HIM:" in unavailable
         assert "no Google account is authorised for calendar" in unavailable
         assert "no Google account is authorised" in rt.sync_classroom()
+
+        # An inbound message refreshes a stale board before it is answered.
+        # Syncing lived only inside the evening tick, so from Friday night to
+        # Sunday afternoon the board froze and he was answered from it.
+        fresh = Runtime(config.Config())
+        calls: list[int] = []
+        fresh.sync_classroom = lambda: calls.append(1) or "synced"  # type: ignore[method-assign]
+
+        assert fresh._last_classroom_sync is None
+        fresh.sync_if_stale()
+        assert calls == [1], "a board never synced must be synced before answering"
+
+        fresh._last_classroom_sync = clock.now()
+        fresh.sync_if_stale()
+        assert calls == [1], "a board synced just now is left alone"
+
+        fresh._last_classroom_sync = clock.now() - timedelta(
+            minutes=CLASSROOM_SYNC_MINUTES + 1)
+        fresh.sync_if_stale()
+        assert calls == [1, 1], "and a stale one is refreshed however late it is"
 
         # The brief is owed once a day and the transcript is what says so.
         import argon.clock as _c
