@@ -81,6 +81,16 @@ struct ArgonWeekendCard: View {
         }
       }
     }
+    .onAppear {
+      // The switch and the shield can disagree: an iOS update, a reinstall or
+      // a revoked Screen Time authorisation stops monitoring without touching
+      // the stored mode, and the card would then read "on" over nothing. If it
+      // claims to be on, make it true.
+      if isOn && !ArgonMetered.isMonitoring {
+        ArgonLog.note("weekend", "was on but not monitoring — reasserting")
+        set("weekend")
+      }
+    }
     .familyActivityPicker(isPresented: $picking, selection: $selection)
     .onChange(of: picking) { _, open in
       // Written when the sheet closes, not on every keystroke of selection:
