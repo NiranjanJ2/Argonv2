@@ -48,6 +48,21 @@ export const className = `
   .meta { font-size: 11px; opacity: 0.55; margin-top: 3px; }
   .sep { height: 1px; background: rgba(255,255,255,0.08); margin: 12px 0 6px; }
 
+  /* Focus is its own row: a task can run with nothing blocked, and he can be
+     locked in without a task, so the panel says which it is looking at. */
+  .focus { display: flex; align-items: center; gap: 7px; margin-top: 10px;
+           padding: 7px 10px; border-radius: 10px; font-size: 11px;
+           background: rgba(255,255,255,0.05);
+           border: 1px solid rgba(255,255,255,0.08); }
+  .focus .dot { width: 6px; height: 6px; border-radius: 50%;
+                background: rgba(255,255,255,0.35); flex: 0 0 auto; }
+  .focus.on { background: rgba(255,107,107,0.14);
+              border-color: rgba(255,107,107,0.34); color: #FFD9D9; }
+  .focus.on .dot { background: #FF6B6B; box-shadow: 0 0 8px #FF6B6B; }
+  .focus .why { margin-left: auto; opacity: 0.55; font-size: 9.5px;
+                overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+                max-width: 45%; }
+
   .running { margin-top: 10px; padding: 10px 12px; border-radius: 12px;
              background: linear-gradient(135deg, rgba(77,163,255,0.22),
                                                  rgba(38,103,196,0.12));
@@ -136,6 +151,16 @@ export const render = ({ output }) => {
     <div className={laterOpen ? "open" : ""}>
       <h1>{view.title}</h1>
       {view.lines.map((line, i) => <div className="meta" key={i}>{line}</div>)}
+
+      {view.focus && (
+        <div className={view.focus.on ? "focus on" : "focus"}>
+          <span className="dot" />
+          {view.focus.on
+            ? `Apps blocked until ${view.focus.until}`
+            : `Block starts ${view.focus.starts}`}
+          <span className="why">{view.focus.reason}</span>
+        </div>
+      )}
 
       {running && (
         <div className="running row">

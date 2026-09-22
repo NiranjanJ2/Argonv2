@@ -135,9 +135,28 @@ def build_view(state: dict, *, now: datetime | None = None) -> dict:
     # State first, count second. "argon 2!" told him a number without telling
     # him what it was a number of, and said nothing at all about whether he was
     # working — which is the one thing a menu bar is for.
+    # Focus: what he is on and whether the phone is actually shut. The two are
+    # separate facts — a task can be running with no block, and he can be
+    # locked in without a task — so the readout says which it is looking at
+    # rather than inferring one from the other.
+    lock = state.get("lock") or {}
+    focus = None
+    if lock:
+        until = str(lock.get("until") or "")[11:16]
+        focus = {
+            "on": bool(lock.get("active")),
+            "until": until,
+            "reason": lock.get("reason") or "",
+            "starts": str(lock.get("from") or "")[11:16],
+        }
+
     tonight = [t for t in tasks
                if _due_label(t.get("due"), today) in ("overdue", "today", "tomorrow")]
-    if started:
+    if started and focus and focus["on"]:
+        title = f"🔒 {started[0]['title'][:20]}"
+    elif focus and focus["on"]:
+        title = f"🔒 blocked till {focus['until']}"
+    elif started:
         title = f"▶ {started[0]['title'][:24]}"
     elif tonight:
         title = f"Idle · {len(tonight)} tonight"
@@ -152,6 +171,10 @@ def build_view(state: dict, *, now: datetime | None = None) -> dict:
         lines.append(f"In {school['period']}")
     elif school.get("schedule"):
         lines.append(school["schedule"])
+    if focus and focus["on"]:
+        lines.insert(0, f"Blocked until {focus['until']} — {focus['reason']}"[:70])
+    elif focus:
+        lines.insert(0, f"Block starts {focus['starts']} — {focus['reason']}"[:70])
     budget = state.get("budget") or {}
     if budget.get("cap"):
         lines.append(f"${budget.get('spent', 0):.2f} of ${budget['cap']:.0f} this month")
@@ -164,6 +187,7 @@ def build_view(state: dict, *, now: datetime | None = None) -> dict:
         "title": title,
         "lines": lines,
         "ok": True,
+        "focus": focus,
         "tasks": [{
             "id": t["id"],
             "title": t.get("title", ""),
@@ -194,6 +218,9 @@ def render_swiftbar(view: dict) -> str:
             out.append(f"--{text} | bash={me} param1=--do param2={verb} "
                        f"param3={t['id']} terminal=false refresh=true")
     out.append("---")
+    if view.get("focus"):
+        out.append(f"Unlock now | bash={me} param1=--do param2=unlock "
+                   f"terminal=false refresh=true")
     out.append(f"Refresh | refresh=true")
     return "\n".join(out)
 
@@ -218,6 +245,8 @@ def do(verb: str, task_id: str = "") -> str:
         r = subprocess.run(["osascript", "-e", script], capture_output=True, text=True)
         title = r.stdout.split("text returned:")[-1].strip()
         return str(call("/v1/tasks", "POST", {"title": title})) if title else "cancelled"
+    if verb == "unlock":
+        return str(call("/v1/ios/override", "POST", {"minutes": 120}))
     if verb == "say":
         return str(call("/v2/say", "POST", {"text": task_id, "source": "desktop"}))
     return f"unknown action {verb!r}"
@@ -260,6 +289,28 @@ def selftest() -> None:
 
     # The title says what he is doing before it says how much there is. A bare
     # count ("argon 2!") is a number with no noun and no state.
+    # Focus is two facts, not one: a task can run with nothing blocked, and he
+    # can be locked in without a task. The readout must say which it has.
+    focused = build_view({
+        "tasks": [{"id": "b", "title": "Essay", "due": "2026-09-14",
+                   "started_at": "2026-09-14T17:00:00-07:00"}],
+        "lock": {"active": True, "from": "2026-09-14T17:00:00-07:00",
+                 "until": "2026-09-14T21:00:00-07:00", "reason": "working on Essay"},
+    }, now=now)
+    assert focused["title"].startswith("🔒 Essay"), focused["title"]
+    assert focused["focus"]["on"] is True
+    assert any("Blocked until 21:00" in line for line in focused["lines"]), focused["lines"]
+
+    booked = build_view({
+        "tasks": [],
+        "lock": {"active": False, "from": "2026-09-14T20:30:00-07:00",
+                 "until": "2026-09-14T21:30:00-07:00", "reason": "start work"},
+    }, now=now)
+    assert booked["focus"]["on"] is False
+    assert any("Block starts 20:30" in line for line in booked["lines"]), booked["lines"]
+
+    assert build_view({"tasks": []}, now=now)["focus"] is None
+
     late_only = build_view({"tasks": [{"id": "a", "title": "Late", "due": "2026-09-01"}]},
                            now=now)
     assert late_only["title"] == "Idle · 1 tonight", late_only["title"]
