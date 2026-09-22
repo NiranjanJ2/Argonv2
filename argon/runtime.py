@@ -515,6 +515,15 @@ class Runtime:
             # silently completed its homework.
             refused.append(f"posted material ({type(e).__name__})")
 
+        # His decisions outrank the import. v1 kept these in their own store so
+        # a re-import could not resurrect work he had finished or dismissed —
+        # "done" because plenty of coursework has nothing to submit, "ignored"
+        # because some of it he is simply not doing.
+        settled = {i["id"] for i in items
+                   if self.store.disposition(i["id"]) is not None}
+        if settled:
+            items = [i for i in items if i["id"] not in settled]
+
         known = self.store.external_ids(source="classroom")
         seen: set[str] = set()
         added = 0
@@ -692,10 +701,38 @@ class Runtime:
                       "due": {"type": "string", "description": "YYYY-MM-DD"},
                       "priority": {"type": "string", "enum": ["low", "normal", "high"]}},
               required=["title"])
+        def settle(tid: str, state: str) -> None:
+            """Record his decision against the Classroom item, not the row."""
+            row = store.task(tid)
+            if row is not None and row.source == "classroom" and row.external_id:
+                store.set_disposition(row.external_id, state)
+
+        def ignore_assignment(task: str) -> str:
+            found = store.find_task(task)
+            if found is None:
+                return f"No task matching {task!r}."
+            if found.source != "classroom" or not found.external_id:
+                return (f"{found.title} is not Classroom work — complete or "
+                        f"delete it instead of ignoring it.")
+            settle(found.id, "ignored")
+            store.complete_task(found.id, by="him")
+            return (f"Ignoring {found.title}. It will not come back on the next "
+                    f"sync; say restore to undo.")
+
+        def restore_assignment(task: str) -> str:
+            found = store.find_task(task, include_done=True)
+            if found is None:
+                return f"No task matching {task!r}."
+            if found.external_id:
+                store.clear_disposition(found.external_id)
+            store.reopen_task(found.id)
+            return f"{found.title} is back on the board."
+
         def complete_task(task: str) -> str:
             found = store.find_task(task)
             if found is None:
                 return f"No open task matching {task!r}."
+            settle(found.id, "done")
             done = store.complete_task(found.id)
             return f"completed {done.title}" if done else f"{found.title} was already done"
 
@@ -719,6 +756,19 @@ class Runtime:
               complete_task,
               params={"task": {"type": "string", "description": "id or part of the title"}},
               required=["task"], background=False)
+        t.add("ignore_assignment",
+              "Drop a Classroom assignment for good — he is not doing it. "
+              "Different from completing it: this says it was never going to "
+              "happen. It stays gone across syncs.",
+              ignore_assignment,
+              params={"task": {"type": "string"}}, required=["task"],
+              background=False)
+        t.add("restore_assignment",
+              "Put back something ignored or marked done by mistake.",
+              restore_assignment,
+              params={"task": {"type": "string"}}, required=["task"],
+              background=False)
+
         t.add("update_task", "Change a task's title, subject, due date or priority.",
               update_task,
               params={"task": {"type": "string"}, "title": {"type": "string"},
@@ -1359,6 +1409,35 @@ def _selftest() -> None:
         assert seqs.store.lock_record()["version"] > first, \
             "a cleared lock must not hand its version to the next one"
         seqs.store.clear_lock()
+
+        # His decision about a Classroom item outlives the import. Ported from
+        # v1: "done" because plenty of coursework has nothing to submit, and
+        # "ignored" because some of it he is simply not doing.
+        disp = Runtime(config.Config())
+        item = {"id": "cw-ignored", "title": "Reminder: study for midterm",
+                "course": "APUSH", "due": "2026-09-30"}
+        disp.store.add_task(item["title"], subject=item["course"],
+                            due=item["due"], source="classroom",
+                            external_id=item["id"])
+        found = disp.store.find_task("midterm")
+        assert found is not None
+        assert "Ignoring" in disp.tools.call(
+            "ignore_assignment", {"task": found.id}, background=False)
+        assert disp.store.disposition("cw-ignored") == "ignored"
+        assert disp.store.find_task("midterm") is None, "off the board"
+
+        # A re-import must not resurrect it.
+        disp.store.add_task(item["title"], subject=item["course"],
+                            due=item["due"], source="classroom",
+                            external_id=item["id"])
+        settled = disp.store.disposition("cw-ignored")
+        assert settled == "ignored", "the decision survives the import"
+
+        # And he can undo it.
+        assert "back on the board" in disp.tools.call(
+            "restore_assignment", {"task": found.id}, background=False)
+        assert disp.store.disposition("cw-ignored") is None
+        assert disp.store.find_task("midterm") is not None
 
         # Argon may not claim a lock the phone has not confirmed. v1 kept
         # desired and applied apart and compared versions for exactly this.

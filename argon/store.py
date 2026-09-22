@@ -64,6 +64,15 @@ CREATE TABLE IF NOT EXISTS facts (
 STARTED_TTL = timedelta(hours=12)
 
 
+#: What he has decided about a Classroom assignment, independent of what
+#: Classroom thinks. Ported from v1, which kept this in its own store for the
+#: reason its comment gives: plenty of coursework has nothing to turn in — read
+#: chapter 2, study for the quiz — so waiting for a submission state that can
+#: never arrive would nag him about finished work for ever. "ignored" is the
+#: different decision: not doing this at all.
+DISPOSITIONS = ("done", "ignored")
+
+
 @dataclass(frozen=True)
 class Task:
     id: str
@@ -342,22 +351,27 @@ class Store:
                        summary=", ".join(f"{k}={v}" for k, v in allowed.items()))
         return self.task(tid)
 
-    def find_tasks(self, needle: str) -> list[Task]:
-        """Every open task matching *needle*; an exact id match wins alone."""
+    def find_tasks(self, needle: str, *, include_done: bool = False) -> list[Task]:
+        """Every matching task; an exact id match wins alone.
+
+        *include_done* is for undoing: restoring something ignored or ticked
+        off by mistake has to be able to find it after it left the board.
+        """
+        pool = self.tasks() + (self.tasks(done=True) if include_done else [])
         needle = needle.strip().lower()
-        exact = [t for t in self.tasks() if needle == t.id]
+        exact = [t for t in pool if needle == t.id]
         if exact:
             return exact
-        return [t for t in self.tasks() if needle in t.title.lower()]
+        return [t for t in pool if needle in t.title.lower()]
 
-    def find_task(self, needle: str) -> Task | None:
+    def find_task(self, needle: str, *, include_done: bool = False) -> Task | None:
         """The single match, or None when there is none *or several*.
 
         Returning the first of several is the guess that silently completed
         the wrong 'Math homework' in v1. Callers that can report ambiguity
         should use `find_tasks`.
         """
-        found = self.find_tasks(needle)
+        found = self.find_tasks(needle, include_done=include_done)
         return found[0] if len(found) == 1 else None
 
     # -- facts ------------------------------------------------------------
@@ -427,6 +441,47 @@ class Store:
         except (json.JSONDecodeError, KeyError, ValueError):
             return None
         return (until, data.get("reason", "")) if until > clock.now() else None
+
+    # -- classroom dispositions -------------------------------------------
+    def set_disposition(self, key: str, state: str) -> None:
+        """Record his decision about one Classroom assignment.
+
+        Keyed on the Classroom identity rather than the task row, so it
+        survives a re-import, a rename, and the task being closed and reopened.
+        That is the point: the decision is his and outlives whatever the sync
+        does to the board.
+        """
+        if state not in DISPOSITIONS:
+            raise ValueError(f"unknown disposition {state!r}")
+        with self._lock:
+            self._db.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                (f"disp:{key}", json.dumps({"state": state,
+                                            "at": clock.now().isoformat()})))
+            self._db.commit()
+        self._t.append("disposition", id=key, summary=state)
+
+    def disposition(self, key: str) -> str | None:
+        """"done", "ignored", or None — one read for both decisions."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT value FROM settings WHERE key=?", (f"disp:{key}",)).fetchone()
+        if row is None:
+            return None
+        try:
+            state = json.loads(row["value"]).get("state")
+        except json.JSONDecodeError:
+            # Never silently un-settle. v1 was strict here for the same reason:
+            # work he had dismissed coming back as due, with nothing anywhere
+            # saying why, is what costs him trust in the board.
+            return "done"
+        return state if state in DISPOSITIONS else None
+
+    def clear_disposition(self, key: str) -> None:
+        with self._lock:
+            self._db.execute("DELETE FROM settings WHERE key=?", (f"disp:{key}",))
+            self._db.commit()
+        self._t.append("disposition_cleared", id=key)
 
     def ac_units(self) -> list[dict]:
         """Air conditioners he has bound, with their keys.
