@@ -92,6 +92,13 @@ class Provider:
     #: working, so nothing looked broken.
     fallback_model: str = "gpt-5-mini"
     timeout_s: float = 90.0
+    #: How hard the model thinks before answering. Argon reads a board that is
+    #: already rendered for it, picks a tool or none, and writes two sentences —
+    #: work that does not need deep reasoning, and the default depth was costing
+    #: eight to twenty-six seconds on questions as simple as "nothing else due
+    #: today right?". Empty string omits the parameter for endpoints that reject
+    #: it.
+    reasoning_effort: str = "low"
 
 
 @dataclass

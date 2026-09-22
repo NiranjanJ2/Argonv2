@@ -541,6 +541,38 @@ def _hw_due_date(text: str, posted: datetime) -> str | None:
         return None
 
 
+
+
+#: Words that carry no identity in an assignment title.
+_TITLE_NOISE = frozenset("""the a an and or of for to in on at by with from due
+    hw homework read watch complete finish study review practice assignment
+    monday tuesday wednesday thursday friday""".split())
+
+
+def _words(title: str) -> set[str]:
+    return {w for w in re.findall(r"[0-9a-z\u3000-\u9fff]{2,}", title.lower())
+            if w not in _TITLE_NOISE}
+
+
+def _already_assigned(scraped: str, assigned: list[set[str]]) -> bool:
+    """Whether real coursework already covers this scraped line.
+
+    Matched on the distinctive words rather than the string, because the same
+    work is written two ways: the post says "9/21 MCQ Test Corrections" and the
+    assignment is called "9/21 MCQ Monday Test Corrections".
+    """
+    mine = _words(scraped)
+    if not mine:
+        return False
+    for theirs in assigned:
+        if not theirs:
+            continue
+        overlap = len(mine & theirs)
+        if overlap and overlap * 2 >= min(len(mine), len(theirs)):
+            return True
+    return False
+
+
 def material_homework(account: str, days_back: int = 10) -> list[dict[str, Any]]:
     """Homework scraped out of daily material posts.
 
@@ -567,6 +599,16 @@ def material_homework(account: str, days_back: int = 10) -> list[dict[str, Any]]
 
     seen: dict[str, dict[str, Any]] = {}
     for cid, name in courses.items():
+        # What the course already assigns properly. A teacher who posts the
+        # week's agenda *and* creates the assignment would otherwise put the
+        # same work on the board twice under two spellings — AP Lang gave him
+        # "9/21 MCQ Monday Test Corrections" and "9/21 MCQ Test Corrections",
+        # which no amount of deduplicating scraped text against itself catches.
+        try:
+            assigned = [_words(w.get("title") or "")
+                        for w in _all_coursework(svc, cid)]
+        except Exception:  # noqa: BLE001
+            assigned = []
         try:
             page = svc.courses().courseWorkMaterials().list(
                 courseId=cid, courseWorkMaterialStates=["PUBLISHED"],
@@ -587,7 +629,7 @@ def material_homework(account: str, days_back: int = 10) -> list[dict[str, Any]]
                 if len(title) < 4:
                     continue
                 key = f"{cid}:{title.lower()}"
-                if key in seen:
+                if key in seen or _already_assigned(title, assigned):
                     continue
                 seen[key] = {
                     # sha1, not hash(): Python randomises string hashing per
@@ -684,10 +726,38 @@ def classroom_due(coursework: dict[str, Any]) -> datetime | None:
         return None
 
 
+#: A deadline at or before this hour is collected in the morning, which means
+#: the work happens the night before. 12:00 rather than, say, 09:00 because a
+#: "due by lunchtime" item is still last night's job.
+WORK_NIGHT_CUTOFF_HOUR = 12
+
+
+def work_night(due: datetime | None) -> str:
+    """The day he has to *do* it, which is not always the day it is collected.
+
+    Two shapes come out of his Classroom. A 23:59 deadline is already the night
+    he works: 漢字フラッシュカード due Mon 23:59 is Monday's job. But a deadline at
+    08:30 is the start of the school day — nothing is getting done that morning,
+    so it belongs to the night before.
+
+    His teachers say so themselves: AP Lang titles the assignment "9/21 MCQ
+    Monday Test Corrections" and sets the deadline to 09-22 08:30. The title is
+    the work night; the deadline is the collection.
+
+    Showing the collection date made every morning-deadline assignment look a
+    day later than it really was, across English and Math both.
+    """
+    if due is None:
+        return ""
+    if due.hour < WORK_NIGHT_CUTOFF_HOUR:
+        return (due - timedelta(days=1)).strftime("%Y-%m-%d")
+    return due.strftime("%Y-%m-%d")
+
+
 def _due_key(work: dict[str, Any]) -> tuple:
-    """Sort by local due date, undated last — the order he reads them in."""
-    due = classroom_due(work)
-    return (1, "") if due is None else (0, due.strftime("%Y-%m-%d"))
+    """Sort by the night he has to do it, undated last."""
+    night = work_night(classroom_due(work))
+    return (1, "") if not night else (0, night)
 
 
 def search_all_mail(accounts: list[str], query: str, limit: int = 5) -> str:
@@ -756,6 +826,29 @@ def _selftest() -> None:
         undated = {"dueDate": {"year": 2026, "month": 9, "day": 20}}
         assert classroom_due(undated).strftime("%Y-%m-%d %H:%M") == "2026-09-20 23:59"
         assert classroom_due({}) is None
+
+        # The board shows the night he works, not the morning it is collected.
+        # AP Lang titles this one "9/21" and sets the deadline to 09-22 08:30.
+        assert work_night(classroom_due(
+            {"dueDate": {"year": 2026, "month": 9, "day": 22},
+             "dueTime": {"hours": 15, "minutes": 30}})) == "2026-09-21"
+        # A 23:59 deadline is already the right night; it must not shift again.
+        assert work_night(classroom_due(
+            {"dueDate": {"year": 2026, "month": 9, "day": 22},
+             "dueTime": {"hours": 6, "minutes": 59}})) == "2026-09-21"
+        # A bare date is end of day, so it stays put.
+        assert work_night(classroom_due(
+            {"dueDate": {"year": 2026, "month": 9, "day": 20}})) == "2026-09-20"
+        assert work_night(None) == ""
+
+        # Scraped homework that the course also assigns properly is dropped.
+        # AP Lang put "9/21 MCQ Test Corrections" in its weekly post and
+        # created "9/21 MCQ Monday Test Corrections" as coursework; both
+        # reached his board, on the same day, as two separate tasks.
+        assigned = [_words("9/21 MCQ Monday Test Corrections")]
+        assert _already_assigned("9/21 MCQ Test Corrections", assigned)
+        assert not _already_assigned("Read The Crucible Act 4", assigned)
+        assert not _already_assigned("漢字フラッシュカード", assigned)
 
         assert format_events([]) == "Nothing on the calendar."
         line = format_events([{"summary": "Lab", "start": {"dateTime": "2026-09-14T15:00:00-07:00"}}])

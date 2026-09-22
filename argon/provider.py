@@ -108,6 +108,8 @@ def complete(
             continue
         budget.check(cap, model)  # refuses before spending, not after
         body: dict[str, Any] = {"model": model, "messages": messages}
+        if cfg.reasoning_effort:
+            body["reasoning_effort"] = cfg.reasoning_effort
         if tools:
             body["tools"] = tools
             body["tool_choice"] = "auto"
