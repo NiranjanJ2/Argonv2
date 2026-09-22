@@ -398,12 +398,14 @@ def _all_coursework(svc, course_id: str) -> list[dict[str, Any]]:
 
 def outstanding_assignments(account: str, days_back: int = DAYS_BACK,
                             days_ahead: int = DAYS_AHEAD
-                            ) -> tuple[list[dict[str, Any]], list[str]]:
+                            ) -> tuple[list[dict[str, Any]], set[str], list[str]]:
     """Work he still owes, inside the window, as records rather than prose.
 
     ``list_assignments`` renders these for the model and the task board takes
     the fields, so both call this and cannot disagree. Returns (assignments,
-    courses that could not be read).
+    all outstanding coursework ids, courses that could not be read). The ids
+    deliberately include owed work outside the display window: an old item is
+    hidden from the phone, not falsely treated as submitted.
     """
     svc = _service(account, "classroom", "v1")
     courses = {c["id"]: c.get("name", "?")
@@ -412,6 +414,7 @@ def outstanding_assignments(account: str, days_back: int = DAYS_BACK,
     ceiling = (clock.now() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
 
     out: list[dict[str, Any]] = []
+    outstanding_ids: set[str] = set()
     refused: list[str] = []
     for cid, name in courses.items():
         try:
@@ -423,6 +426,7 @@ def outstanding_assignments(account: str, days_back: int = DAYS_BACK,
             }
             if not owed:
                 continue
+            outstanding_ids.update(owed)
             work = _all_coursework(svc, cid)
         except Exception as e:  # noqa: BLE001
             # One locked-down course must not blank out the others.
@@ -446,7 +450,7 @@ def outstanding_assignments(account: str, days_back: int = DAYS_BACK,
                         "due_at": at.isoformat() if at else "",
                         "due_precision": due_precision(cw)})
     out.sort(key=lambda a: a["due"])
-    return out, refused
+    return out, outstanding_ids, refused
 
 
 #: Posts older than this are history, not homework. v1's number.
@@ -547,7 +551,7 @@ def list_assignments(account: str, limit: int = 30, days_back: int = DAYS_BACK) 
     in". Without this the list is everything ever assigned, which is worse than
     no list: he stops reading it.
     """
-    items, refused = outstanding_assignments(account, days_back)
+    items, _, refused = outstanding_assignments(account, days_back)
     if not items:
         text = "No assignments outstanding."
     else:
@@ -613,6 +617,21 @@ def classroom_due(coursework: dict[str, Any]) -> datetime | None:
         return None
 
 
+def classroom_task_date(coursework: dict[str, Any]) -> str:
+    """The day homework belongs on the board.
+
+    A Classroom date without a time means it should be finished the night
+    before. Timed deadlines retain their exact local instant; midnight UTC
+    deadlines already convert to the preceding Pacific date.
+    """
+    due = classroom_due(coursework)
+    if due is None:
+        return ""
+    if coursework.get("dueTime") is None:
+        due -= timedelta(days=1)
+    return due.strftime("%Y-%m-%d")
+
+
 def due_precision(coursework: dict[str, Any]) -> str:
     """"instant" when the teacher set a time, "work_by_day" when only a date.
 
@@ -629,8 +648,8 @@ def due_precision(coursework: dict[str, Any]) -> str:
 
 def _due_key(work: dict[str, Any]) -> tuple:
     """Sort by local due date, undated last — the order he reads them in."""
-    due = classroom_due(work)
-    return (1, "") if due is None else (0, due.strftime("%Y-%m-%d"))
+    due = classroom_task_date(work)
+    return (1, "") if not due else (0, due)
 
 
 def search_all_mail(accounts: list[str], query: str, limit: int = 5) -> str:
@@ -698,6 +717,10 @@ def _selftest() -> None:
         # No dueTime is a bare calendar date, so end-of-day *local*.
         undated = {"dueDate": {"year": 2026, "month": 9, "day": 20}}
         assert classroom_due(undated).strftime("%Y-%m-%d %H:%M") == "2026-09-20 23:59"
+        assert classroom_task_date(undated) == "2026-09-19", \
+            "date-only homework belongs on the previous evening's board"
+        assert classroom_task_date(review) == "2026-09-18", \
+            "a timed deadline retains its exact local date"
         assert classroom_due({}) is None
 
         # v1's distinction, which this rewrite had flattened: a deadline with a

@@ -413,10 +413,14 @@ class Runtime:
 
     def end_task(self, tid: str, *, done: bool) -> object | None:
         """Done with it, or putting it down. Either way the shield comes off."""
+        current = self.store.task(tid)
         task = (self.store.complete_task(tid, by="him") if done
                 else self.store.stop_task(tid))
         if task is None:
             return None
+        if (done and current and current.source == "classroom"
+                and current.external_id):
+            self.store.set_disposition(current.external_id, "done")
         # Only lift a lock that this task raised. He may have asked for a
         # lock-in separately, and finishing one assignment is not a reason to
         # unblock his phone for the rest of the evening.
@@ -492,7 +496,7 @@ class Runtime:
         if account is None:
             return "no Google account is authorised for classroom"
         try:
-            items, refused = google.outstanding_assignments(account)
+            items, outstanding_ids, refused = google.outstanding_assignments(account)
         except google.GoogleUnavailable as e:
             return str(e)
         except Exception as e:  # noqa: BLE001
@@ -539,7 +543,7 @@ class Runtime:
         else:
             note_suffix = ""
             for external_id, task in known.items():
-                if external_id not in seen:
+                if external_id not in outstanding_ids:
                     # Marked as the sync's own closure, so a later sync that
                     # sees the work again may undo it. A closure he made by
                     # hand is never undone.
@@ -1421,6 +1425,27 @@ def _selftest() -> None:
             "restore_assignment", {"task": found.id}, background=False)
         assert disp.store.disposition("cw-ignored") is None
         assert disp.store.find_task("midterm") is not None
+
+        # The visible Classroom window is not completion evidence. Old owed
+        # work can be hidden from the phone without being marked submitted.
+        sync_truth = Runtime(config.Config())
+        old = sync_truth.store.add_task("Old math homework", source="classroom",
+                                        external_id="cw-old", due="2026-08-01")
+        original_account_for = google.account_for
+        original_outstanding = google.outstanding_assignments
+        google.account_for = lambda capability, accounts: "school"  # type: ignore[assignment]
+        google.outstanding_assignments = lambda account: ([], {"cw-old"}, [])  # type: ignore[assignment]
+        try:
+            sync_truth.sync_classroom()
+            assert not sync_truth.store.task(old.id).done, \
+                "outside the display window is still outstanding"
+            google.outstanding_assignments = lambda account: ([], set(), [])  # type: ignore[assignment]
+            sync_truth.sync_classroom()
+            assert sync_truth.store.task(old.id).done, \
+                "only absence from Classroom's owed set closes the task"
+        finally:
+            google.account_for = original_account_for  # type: ignore[assignment]
+            google.outstanding_assignments = original_outstanding  # type: ignore[assignment]
 
         # Argon may not claim a lock the phone has not confirmed. v1 kept
         # desired and applied apart and compared versions for exactly this.

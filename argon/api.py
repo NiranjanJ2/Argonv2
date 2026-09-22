@@ -607,6 +607,11 @@ def _selftest() -> None:
         assert c.get("/v1/status", headers=auth).get_json()["state"]["mode"] == "working"
         assert c.patch(f"/v1/tasks/{t.id}", json={"done": True}, headers=auth).status_code == 200
         assert c.patch(f"/v1/tasks/{t.id}", json={"done": True}, headers=auth).status_code == 200
+        classroom = rt.store.add_task("Japanese worksheet", source="classroom",
+                                      external_id="jp-1", due="2026-09-15")
+        assert c.patch(f"/v1/tasks/{classroom.id}", json={"done": True},
+                       headers=auth).status_code == 200
+        assert rt.store.disposition("jp-1") == "done"
         assert c.patch("/v1/tasks/nope", json={"done": True}, headers=auth).status_code == 404
 
         assert c.post("/v1/ios/register", json={"token": "a" * 64},
