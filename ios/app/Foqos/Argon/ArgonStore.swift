@@ -214,6 +214,15 @@ final class ArgonStore {
     }
   }
 
+  /// Dismiss the brief. Optimistic like every other write, so the card goes
+  /// away on the tap rather than on the round trip.
+  func ackBrief() async {
+    guard state.brief != nil, state.brief?.acked == false else { return }
+    state.brief?.acked = true
+    ArgonLog.note("brief", "dismissed")
+    Task { try? await client.ackBrief() }
+  }
+
   func markRead() async {
     guard state.unread > 0 else { return }
     state.unread = 0

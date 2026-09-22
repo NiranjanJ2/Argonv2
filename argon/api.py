@@ -382,6 +382,7 @@ def create_app(rt) -> Flask:
             "budget": {"spent": budget.month()["usd"], "cap": rt.cfg.monthly_cap_usd,
                        "cached_fraction": budget.cached_fraction()},
             "lock": lock_json(),
+            "brief": rt.brief_card(),
         })
 
     @app.post("/v2/log")
@@ -420,6 +421,14 @@ def create_app(rt) -> Flask:
         rows = [{"at": e.at, **e.payload}
                 for e in rt.transcript.window(2) if e.kind == "app_log"]
         return jsonify({"entries": rows[-int(request.args.get("limit", 200)):]})
+
+    @app.post("/v2/brief/ack")
+    @require_token
+    def v2_brief_ack():
+        """He has read the brief. Recorded rather than inferred from a fetch:
+        the app refreshes on every wake, and treating that as "seen" dismissed
+        briefs he never looked at."""
+        return jsonify({"ok": rt.ack_brief()})
 
     @app.get("/v2/messages")
     @require_token

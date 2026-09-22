@@ -68,6 +68,7 @@ class Agent:
         """
         self._background = background
         self._went_quiet = False
+        self._spoke_this_turn = False
         try:
             return self._turn(background=background, extra=extra)
         finally:
@@ -156,6 +157,14 @@ class Agent:
         # has forbidden this from the first draft and on 20 Sep it still said
         # APUSH had only two past reminders while two live APUSH tasks sat in
         # the board it had been handed. Checked against the board instead.
+        # One message per turn. On 20 Sep finishing one task produced "Marked
+        # InQuizitive Ch 6 (APUSH) done." and then "Nice — I marked InQuizitive
+        # Ch 6 done and added a note." — two notifications, one action. If
+        # there is more to say it belongs in the same message.
+        if getattr(self, "_spoke_this_turn", False):
+            return ("Error: you have already sent him a message this turn. "
+                    "He does not need a second one for the same action. If "
+                    "something is genuinely missing, it belonged in the first.")
         if (missed := unmentioned_live_work(text, self.store.tasks())):
             listed = "; ".join(f"{t.title} ({t.subject}) due {t.due}" for t in missed[:6])
             return ("Error: not sent. That says nothing is there, but the board "
@@ -176,6 +185,7 @@ class Agent:
                     f"The channel is misconfigured; rewording will not help. "
                     f"Do not call say again this turn.")
         self.t.append("message_out", text=text)
+        self._spoke_this_turn = True
         return "sent"
 
     def _unanswered_gate(self) -> str | None:
@@ -459,14 +469,18 @@ def _selftest() -> None:
     a2.deliver = lambda text: []
     a2._background, a2._went_quiet = True, False
     assert a2.say("first") == "sent"
+    a2._spoke_this_turn = False   # these probe the backoff, not the per-turn rule
     assert a2.say("second").startswith("Error"), "a second unprompted send must wait"
     t2.append("message_in", text="ok")
+    a2._spoke_this_turn = False
     assert a2.say("third") == "sent", "his reply reopens the channel"
 
     # A verified deadline buys the interruption — this is the case the flat
     # backoff got wrong, swallowing "your event starts in fifteen minutes".
+    a2._spoke_this_turn = False
     assert a2.say("fourth").startswith("Error")
     a2.urgent_now = lambda: "All Project Sync starts in 12 minutes"
+    a2._spoke_this_turn = False
     assert a2.say("your 19:00 starts in 12 minutes") == "sent"
 
     # The cap bounds volume, which the backoff does not: spacing alone lets a
@@ -474,6 +488,7 @@ def _selftest() -> None:
     a2.urgent_now = lambda: None
     while True:
         t2.append("message_in", text="go on")       # reopen, so only the cap bites
+        a2._spoke_this_turn = False
         r = a2.say("another")
         if r != "sent":
             break
@@ -484,11 +499,20 @@ def _selftest() -> None:
     # A deadline still gets through the cap — a missed event is not what the
     # cap protects him from.
     a2.urgent_now = lambda: "Robotics starts in 8 minutes"
+    a2._spoke_this_turn = False
     assert a2.say("robotics in 8") == "sent"
 
     # Going quiet is the action; announcing it is not going quiet.
     a2._went_quiet = True
     assert a2.say("standing down for tonight").startswith("Error")
+
+    # One message per turn: finishing one task sent two notifications.
+    t3 = Transcript(Path(tmp) / "once.db")
+    a3 = Agent(cfg, t3, store, Tools(t3), "SYS")
+    a3.deliver = lambda text: []
+    a3._background, a3._went_quiet, a3._spoke_this_turn = False, False, False
+    assert a3.say("Marked InQuizitive Ch 6 done.") == "sent"
+    assert a3.say("Nice — I marked it done and added a note.").startswith("Error")
 
     # An invented absence is the error he cannot catch. These are the real
     # message from 20 Sep and the answers that must still get through.

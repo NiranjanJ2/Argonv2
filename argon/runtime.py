@@ -687,6 +687,11 @@ class Runtime:
             if found is None:
                 return f"No task matching {task!r}."
             updated = store.update_task(found.id, **changes)
+            if updated and changes.get("due"):
+                # A date he chose outranks Classroom's. Without pinning it, the
+                # next sync half an hour later put it back and he was left
+                # asking why the task he had just moved was not where he put it.
+                store.pin_due(found.id)
             return f"updated {updated.title}" if updated else "nothing to change"
 
         t.add("complete_task", "Mark a task done. Only when he says it is done.",
@@ -886,8 +891,38 @@ class Runtime:
         # than a sentence in the prompt — which is what let it send the brief at
         # 16:02, ask "want the brief?" at 16:12 and send it again at 16:22.
         if brief and getattr(out, "spoke", False):
-            self.transcript.append("brief_sent")
+            # Keep the text, not just the fact. The app shows the brief as a
+            # card he dismisses rather than leaving it to be scrolled past in
+            # the chat thread — v1 queued it in an inbox the app collected and
+            # acked, and losing that is why it stopped feeling like a briefing.
+            spoken = next((e.payload.get("text", "")
+                           for e in reversed(self.transcript.window(1))
+                           if e.kind == "message_out"), "")
+            self.transcript.append("brief_sent", text=spoken)
         return out
+
+    def brief_card(self) -> dict | None:
+        """Today's brief for the app, and whether he has dismissed it.
+
+        Delivered *and* shown: the channel message is the notification, this is
+        the thing he opens the app to read. Acknowledgement is a separate row
+        so a reinstall or a second device cannot resurrect a brief he has
+        already dealt with.
+        """
+        today = clock.day_key()
+        sent = next((e for e in reversed(self.transcript.window(1))
+                     if e.kind == "brief_sent" and e.day == today), None)
+        if sent is None or not (sent.payload.get("text") or "").strip():
+            return None
+        acked = any(e.kind == "brief_acked" and e.day == today
+                    for e in self.transcript.window(1))
+        return {"text": sent.payload["text"], "at": sent.at, "acked": acked}
+
+    def ack_brief(self) -> bool:
+        if self.brief_card() is None:
+            return False
+        self.transcript.append("brief_acked")
+        return True
 
     def brief_due(self) -> bool:
         """Whether the after-school brief still owes him one today.
@@ -1127,6 +1162,15 @@ def _selftest() -> None:
         _c.set_for_test(datetime(2026, 9, 19, 17, 0, tzinfo=_c.TZ))   # Saturday
         assert Runtime(config.Config()).brief_due() is False, "not at the weekend"
         _c.set_for_test(None)
+
+        # The brief is shown once and dismissed once.
+        carded = Runtime(config.Config())
+        assert carded.brief_card() is None, "no brief today, nothing to show"
+        carded.transcript.append("brief_sent", text="Two things due tonight.")
+        card = carded.brief_card()
+        assert card and card["text"].startswith("Two things") and card["acked"] is False
+        assert carded.ack_brief() is True
+        assert carded.brief_card()["acked"] is True, "dismissal survives the next read"
 
         # A dead channel falls through to the next; a live one ends it. The
         # count matters: fanning out delivered the same sentence twice, once to

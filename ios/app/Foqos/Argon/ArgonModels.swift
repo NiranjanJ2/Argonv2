@@ -154,6 +154,18 @@ struct ArgonLock: Codable, Equatable {
   var isLive: Bool { secondsLeft > 0 }
 }
 
+/// The afternoon brief, as something he opens the app to read.
+///
+/// The channel message is the notification; this is the briefing. v1 queued it
+/// in a mailbox the app collected and acknowledged, and dropping that is why it
+/// stopped feeling like a brief — it became one more line to scroll past in the
+/// chat thread.
+struct ArgonBrief: Codable, Equatable {
+  var text: String
+  var at: String
+  var acked: Bool
+}
+
 struct ArgonState: Codable, Equatable {
   var now: String?
   var school: ArgonSchool
@@ -163,9 +175,10 @@ struct ArgonState: Codable, Equatable {
   var unread: Int
   var budget: ArgonBudget?
   var lock: ArgonLock?
+  var brief: ArgonBrief?
 
   enum CodingKeys: String, CodingKey {
-    case now, school, ticking, tasks, facts, unread, budget, lock
+    case now, school, ticking, tasks, facts, unread, budget, lock, brief
   }
 
   init(from decoder: Decoder) throws {
@@ -178,6 +191,7 @@ struct ArgonState: Codable, Equatable {
     unread = try c.decodeIfPresent(Int.self, forKey: .unread) ?? 0
     budget = try c.decodeIfPresent(ArgonBudget.self, forKey: .budget)
     lock = try c.decodeIfPresent(ArgonLock.self, forKey: .lock)
+    brief = try c.decodeIfPresent(ArgonBrief.self, forKey: .brief)
   }
 
   static let empty = try! JSONDecoder().decode(ArgonState.self,

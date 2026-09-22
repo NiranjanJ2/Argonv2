@@ -149,6 +149,10 @@ class Store:
         # must never undo his, and without recording the difference the two are
         # indistinguishable the moment the row is written.
         ("tasks", "done_by", "TEXT"),
+        # Set when he moves a due date himself. Classroom re-import refreshes
+        # dates on every sync, which silently undid "make it due today" — the
+        # same failure as the sync reopening tasks he had ticked off.
+        ("tasks", "due_pinned", "INTEGER"),
     )
 
     def _migrate(self) -> None:
@@ -181,7 +185,13 @@ class Store:
                     # walked back every checkmark he made, twenty of them in
                     # one evening, each one a PATCH the server answered 200.
                     self.reopen_task(existing.id)
-                return self.update_task(existing.id, due=due or None,
+                # His due date wins. He said "move the Japanese worksheet to
+                # today", it was moved, and the next sync put it back to
+                # Classroom's date — he noticed only because he went looking
+                # for it. The import may still correct the title and subject.
+                keep_due = self._due_pinned(existing.id)
+                return self.update_task(existing.id,
+                                        due=None if keep_due else (due or None),
                                         title=title, subject=subject or None) \
                     or self.task(existing.id) or existing
         tid = uuid.uuid4().hex[:12]
@@ -283,6 +293,18 @@ class Store:
             title = row["title"]
         self._t.append("task_done", id=tid, summary=title)
         return self.task(tid)
+
+    def _due_pinned(self, tid: str) -> bool:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT due_pinned FROM tasks WHERE id=?", (tid,)).fetchone()
+        return bool(row and row["due_pinned"])
+
+    def pin_due(self, tid: str) -> None:
+        """Mark a due date as his, not Classroom's."""
+        with self._lock:
+            self._db.execute("UPDATE tasks SET due_pinned=1 WHERE id=?", (tid,))
+            self._db.commit()
 
     def _closed_by(self, tid: str) -> str | None:
         with self._lock:
@@ -556,6 +578,22 @@ def _selftest() -> None:
         again3 = s.add_task("HW 17", source="classroom", external_id="cw-17",
                             due="2026-09-13")
         assert again3.done is True, "the sync must not undo his own checkmark"
+
+        # A due date he set by hand survives the next import. He asked for the
+        # Japanese worksheet to be due today, it was, and half an hour later
+        # Classroom's date was back.
+        moved = s.add_task("HW 18", source="classroom", external_id="cw-18",
+                           due="2026-09-30")
+        s.update_task(moved.id, due="2026-09-21")
+        s.pin_due(moved.id)
+        s.add_task("HW 18", source="classroom", external_id="cw-18",
+                   due="2026-09-30")
+        assert s.task(moved.id).due == "2026-09-21", "his date must outrank Classroom's"
+        # The import may still fix the title on a pinned task.
+        s.add_task("HW 18 (revised)", source="classroom", external_id="cw-18",
+                   due="2026-09-30")
+        assert s.task(moved.id).title == "HW 18 (revised)"
+        assert s.task(moved.id).due == "2026-09-21"
         assert "task_reopened" in [e.kind for e in t.window(2)]
 
         assert s.complete_task(a.id).done is True

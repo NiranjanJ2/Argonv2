@@ -20,6 +20,7 @@ struct ArgonTodayView: View {
         statusCard
         boardCard
         overdueCard
+        briefCard
         futureCard
         budgetCard
       }
@@ -216,6 +217,48 @@ struct ArgonTodayView: View {
           }
         }
       }
+    }
+  }
+
+  /// The afternoon brief, at the top, until he dismisses it.
+  ///
+  /// The push notification is how he hears about it; this is what he opens the
+  /// app to read. Delivered into the chat thread alone it was one more line to
+  /// scroll past, which is not what a briefing is. Dismissal is explicit and
+  /// remembered server-side, so it does not come back on the next refresh or
+  /// on another device.
+  @ViewBuilder private var briefCard: some View {
+    if let brief = store.state.brief, !brief.acked,
+       !brief.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      ArgonGlass(tint: Argon.accent) {
+        VStack(alignment: .leading, spacing: 12) {
+          HStack(spacing: 8) {
+            Image(systemName: "sun.horizon.fill")
+              .font(.footnote).foregroundStyle(Argon.accentSoft)
+            Text("THIS AFTERNOON")
+              .font(Argon.label.weight(.semibold)).tracking(1.2)
+              .foregroundStyle(Argon.accentSoft)
+            Spacer()
+            if let at = ArgonDate.parse(brief.at) {
+              Text(at.formatted(date: .omitted, time: .shortened))
+                .font(Argon.label).foregroundStyle(Argon.Tone.faint)
+            }
+          }
+          Text(brief.text)
+            .font(Argon.body).foregroundStyle(Argon.Tone.primary)
+            .fixedSize(horizontal: false, vertical: true)
+            .textSelection(.enabled)
+          Button("Got it") { Task { await store.ackBrief() } }
+            .font(Argon.body.weight(.semibold))
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .background { Capsule().fill(LinearGradient(
+              colors: [Argon.accent, Argon.accentDeep],
+              startPoint: .topLeading, endPoint: .bottomTrailing)) }
+            .buttonStyle(.plain)
+        }
+      }
+      .argonGlow(Argon.accent, strength: 0.6)
     }
   }
 

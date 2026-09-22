@@ -162,6 +162,13 @@ actor ArgonClient {
     _ = try await request("v2/log", method: "POST", body: ["entries": entries])
   }
 
+  /// He has read the brief. Explicit, not inferred from a fetch: the app
+  /// refreshes on every wake, and treating that as "seen" dismissed briefs he
+  /// never looked at.
+  func ackBrief() async throws {
+    _ = try await request("v2/brief/ack", method: "POST", body: [:])
+  }
+
   func register(deviceToken: String) async throws {
     _ = try await request("v1/ios/register", method: "POST", body: ["token": deviceToken])
   }
