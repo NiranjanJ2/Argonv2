@@ -136,6 +136,19 @@ class Agent:
         return out
 
     # -- delivery ---------------------------------------------------------
+    def _blocked(self, guard: str, reason: str) -> str:
+        """Record which guard refused a message, and why.
+
+        Six of these now stack in say(), and they are not equal: some compare
+        the sentence against the database, some pattern-match English. The
+        second kind is a stopgap shaped by the failures that happened to occur
+        in one week, so it has to be possible to see whether each still earns
+        its place — a guard that never fires is dead weight to delete, and one
+        that fires daily means the cause upstream was never fixed.
+        """
+        self.t.append("guard_blocked", guard=guard, summary=reason[:200])
+        return reason
+
     def say(self, text: str) -> str:
         """The only path to him.
 
@@ -159,12 +172,12 @@ class Agent:
         # just figure it out". The prompt has forbidden this throughout.
         if asks_a_question(text):
             if getattr(self, "_background", False):
-                return ("Error: not sent. An unprompted message may not ask him "
+                return self._blocked("question_unprompted", "Error: not sent. An unprompted message may not ask him "
                         "anything — he did not start this conversation, so there "
                         "is nothing he owes an answer to. State it, act on the "
                         "sensible default, or say nothing.")
             if last_message_was_a_question(self.t):
-                return ("Error: not sent. Your last message already asked him "
+                return self._blocked("question_twice", "Error: not sent. Your last message already asked him "
                         "something and this asks again. Take the most reasonable "
                         "reading and act on it; he can correct you in one word.")
 
@@ -178,21 +191,21 @@ class Agent:
         # Ch 6 done and added a note." — two notifications, one action. If
         # there is more to say it belongs in the same message.
         if getattr(self, "_spoke_this_turn", False):
-            return ("Error: you have already sent him a message this turn. "
+            return self._blocked("spoke_twice", "Error: you have already sent him a message this turn. "
                     "He does not need a second one for the same action. If "
                     "something is genuinely missing, it belonged in the first.")
         if (missed := unmentioned_live_work(text, self.store.tasks())):
             listed = "; ".join(f"{t.title} ({t.subject}) due {t.due}" for t in missed[:6])
-            return ("Error: not sent. That says nothing is there, but the board "
+            return self._blocked("invented_absence", "Error: not sent. That says nothing is there, but the board "
                     f"has: {listed}. Either name this work or drop the claim. "
                     "Do not tell him something is absent that the board lists.")
         if getattr(self, "_background", False):
             if self._went_quiet:
-                return ("Error: you called stand_down this turn. Going quiet is "
+                return self._blocked("announced_quiet", "Error: you called stand_down this turn. Going quiet is "
                         "the action; announcing it is not going quiet. He was "
                         "not messaged.")
             if (wait := self._unanswered_gate()) is not None:
-                return wait
+                return self._blocked("too_soon_or_capped", wait)
 
         errors = self.deliver(text)
         if errors:

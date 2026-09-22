@@ -197,6 +197,31 @@ def cmd_applog(_args) -> int:
     return 0
 
 
+def cmd_guards(_args) -> int:
+    """Which guards fired, and how often.
+
+    The point is deletion. A guard that has not fired in weeks is dead weight;
+    one that fires daily means the cause it papers over was never fixed, and
+    the fix belongs upstream rather than in another check at the boundary.
+    """
+    import collections
+
+    from argon import runtime
+    rt = runtime.Runtime()
+    rows = [e for e in rt.transcript.window(2) if e.kind == "guard_blocked"]
+    if not rows:
+        print("no guard fired in the last two days")
+        return 0
+    counts = collections.Counter(e.payload.get("guard", "?") for e in rows)
+    for guard, n in counts.most_common():
+        print(f"{n:4}  {guard}")
+    print(f"\n{len(rows)} refusals total. Latest:")
+    for e in rows[-5:]:
+        print(f"  {e.at[11:19]} {e.payload.get('guard')}: "
+              f"{(e.payload.get('summary') or '')[:90]}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="argon")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -205,6 +230,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("doctor", help="check what has broken before").set_defaults(fn=cmd_doctor)
     sub.add_parser("tick", help="run one tick now").set_defaults(fn=cmd_tick)
     sub.add_parser("applog", help="what the phone reported").set_defaults(fn=cmd_applog)
+    sub.add_parser("guards", help="which output guards are firing"
+                   ).set_defaults(fn=cmd_guards)
     sub.add_parser("ac-scan", help="find, bind and remember air conditioners"
                    ).set_defaults(fn=cmd_ac)
 
