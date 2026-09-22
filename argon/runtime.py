@@ -726,7 +726,13 @@ class Runtime:
                       "priority": {"type": "string"}},
               required=["task"])
 
-        t.add("remember", "Store an operational fact that will matter after today.",
+        t.add("remember",
+              "Store something about him that will still be true later — the "
+              "shape of his weeks, a standing commitment, a preference. Not a "
+              "record of what you just did: a lock has a lock, a stand-down has "
+              "stand_down, a due date has the task. Writing those here creates a "
+              "second copy that drifts from the real one. Unmarked notes expire "
+              "tonight; set standing for the recurring shape of his life.",
               lambda text, standing=False, until="":
                   f"remembered ({store.remember(text, standing=standing, until=until)})",
               params={"text": {"type": "string"},

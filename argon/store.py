@@ -362,10 +362,23 @@ class Store:
 
     # -- facts ------------------------------------------------------------
     def remember(self, text: str, *, standing: bool = False, until: str = "") -> str:
+        """Store a fact. Day-scoped unless it is standing or dated.
+
+        v1's memory was day-scoped and the standing shapes of his life — school
+        hours, when he is free — were the exception that never expired. This
+        rewrite made the opposite the default, so anything said once lived for
+        ever, and the model used `remember` as a scratchpad for state that has
+        a real home: "Start phone lock at 20:30 for 60 minutes, extend twice"
+        sat in memory beside the actual lock record, free to disagree with it.
+        The changelog's one stated principle is that two places holding the same
+        fact is the bug, so a note that is not marked as lasting expires tonight.
+        """
         fid = uuid.uuid4().hex[:12]
         if until and not _ISO_DAY.match(until.strip()):
             self._t.append("bad_until", summary=f"ignored until={until!r} on {text[:60]}")
             until = ""
+        if not standing and not until:
+            until = clock.day_key()
         with self._lock:
             self._db.execute(
                 "INSERT INTO facts (id,text,standing,until,created_at) VALUES (?,?,?,?,?)",
@@ -810,6 +823,20 @@ def _selftest() -> None:
         assert s.quiet() is not None, "and hold until it does"
         s.clear_quiet()
         assert s.quiet() is None
+
+        # A note is today's unless it is marked as lasting. Anything said once
+        # used to live for ever, and the model filled memory with state that
+        # already had a home — a lock schedule, a stand-down, a due-date request.
+        s.remember("he mentioned a dentist thing")
+        s.remember("school runs 08:00 to 15:36", standing=True)
+        today_facts = s.facts()
+        assert "he mentioned a dentist thing" in today_facts
+        assert "school runs 08:00 to 15:36" in today_facts
+        clock.set_for_test(clock.now() + timedelta(days=1))
+        live = s.facts()
+        assert "he mentioned a dentist thing" not in live, live
+        assert "school runs 08:00 to 15:36" in live, live
+        clock.set_for_test(None)
 
         # The lock expires at read time, so it ends on its own if nothing runs.
         assert s.lock() is None
