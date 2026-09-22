@@ -32,6 +32,7 @@ enum ArgonOverride {
   static func engage(minutes: Int) {
     let until = Date().addingTimeInterval(TimeInterval(max(1, minutes) * 60))
     UserDefaults.standard.set(until.timeIntervalSinceReferenceDate, forKey: key)
+    ArgonLog.note("lock", "override engaged for \(minutes)m")
   }
 
   static func clear() {

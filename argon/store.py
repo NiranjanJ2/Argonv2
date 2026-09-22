@@ -453,6 +453,9 @@ class Store:
         started" case: when the window lapses and he still has not begun
         anything, it extends itself rather than quietly letting go.
         """
+        # Read the old version before taking the lock: _next_lock_version goes
+        # through lock_record, which takes the same non-reentrant lock.
+        version = self._next_lock_version()
         with self._lock:
             self._db.execute(
                 "INSERT OR REPLACE INTO settings (key, value) VALUES ('lock', ?)",
@@ -468,11 +471,22 @@ class Store:
                     # assignment silently orphaned its block.
                     "source": source,
                     "task_id": task_id,
+                    # v1's whole protocol was this number. The phone stores the
+                    # last version it applied and reports it back, so the server
+                    # can tell "the phone did it" from "the phone never heard" —
+                    # without which a failure the server does not hear about is
+                    # indistinguishable from a phone that is switched off, and
+                    # Argon believes it has locked a device that is wide open.
+                    "version": version,
                 }),))
             self._db.commit()
         when = "" if starts is None else f" from {starts:%H:%M}"
         self._t.append("lock_set",
                        summary=f"{when} until {until:%H:%M} — {reason}".strip()[:200])
+
+    def _next_lock_version(self) -> int:
+        rec = self.lock_record()
+        return int((rec or {}).get("version", 0)) + 1
 
     def lock_record(self) -> dict | None:
         """The stored lock, live or not, or None if there is none."""
@@ -517,11 +531,46 @@ class Store:
                 (json.dumps({**{k: v for k, v in rec.items()
                                 if k not in ("until_at", "from_at")},
                              "until": until.isoformat(),
+                             # Version deliberately unchanged: v1 extended in
+                             # place without bumping it, because a new version
+                             # makes the phone re-apply, and re-applying
+                             # restarts the window it was trying to extend.
                              "escalations_left": rec["escalations_left"] - 1}),))
             self._db.commit()
         self._t.append("lock_extended",
                        summary=f"to {until:%H:%M}, {rec['escalations_left'] - 1} left")
         return until
+
+    def set_lock_applied(self, *, version: int, shielded: bool,
+                        error: str = "") -> None:
+        """What the phone says it actually did.
+
+        Kept apart from the desired lock on purpose: one is what Argon wants,
+        the other is what is true, and collapsing them is how it ends up
+        reporting a block that never landed.
+        """
+        with self._lock:
+            self._db.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES "
+                "('lock_applied', ?)",
+                (json.dumps({"version": int(version), "shielded": bool(shielded),
+                             "error": error or "",
+                             "at": clock.now().isoformat()}),))
+            self._db.commit()
+        self._t.append("lock_applied",
+                       summary=f"v{version} shielded={shielded}"
+                               + (f" — {error}" if error else ""))
+
+    def lock_applied(self) -> dict | None:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT value FROM settings WHERE key='lock_applied'").fetchone()
+        if row is None:
+            return None
+        try:
+            return json.loads(row["value"])
+        except json.JSONDecodeError:
+            return None
 
     def clear_lock(self, why: str = "cleared") -> None:
         with self._lock:

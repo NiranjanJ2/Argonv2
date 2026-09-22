@@ -148,9 +148,13 @@ struct ArgonLock: Codable, Equatable {
   var active: Bool
   var startsInSeconds: Int
   var secondsLeft: Int
+  /// Bumped whenever the desired lock changes. The phone reports back the
+  /// version it applied, which is how the server tells "done" from "never
+  /// heard" — v1's whole protocol, and the thing v2 had no answer for.
+  var version: Int
 
   enum CodingKeys: String, CodingKey {
-    case from, until, reason, active
+    case from, until, reason, active, version
     case startsInSeconds = "starts_in_seconds"
     case secondsLeft = "seconds_left"
   }

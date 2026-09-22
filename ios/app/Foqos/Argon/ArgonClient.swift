@@ -169,6 +169,18 @@ actor ArgonClient {
     _ = try await request("v2/brief/ack", method: "POST", body: [:])
   }
 
+  /// What the phone actually did with the lock.
+  ///
+  /// Sent even — especially — on failure: a failure the server never hears
+  /// about is indistinguishable from a phone that is switched off, which is
+  /// how Argon ends up believing it has locked a device that is wide open.
+  func reportLock(version: Int, shielded: Bool, error: String?) async throws {
+    var body: [String: Any] = ["version": version, "shielded": shielded,
+                               "applied_at": ISO8601DateFormatter().string(from: Date())]
+    if let error { body["error"] = error }
+    _ = try await request("v1/ios/state", method: "POST", body: body)
+  }
+
   func register(deviceToken: String) async throws {
     _ = try await request("v1/ios/register", method: "POST", body: ["token": deviceToken])
   }

@@ -219,6 +219,15 @@ def create_app(rt) -> Flask:
         """What the phone reports about itself. Recorded as an observation the
         agent reads — never as a trigger that makes something happen."""
         data = body()
+        # The convergence report, when the phone sends one. v1's whole protocol
+        # was this: the app stores the last lock version it applied and reports
+        # it back, so "the phone did it" is distinguishable from "the phone
+        # never heard". Everything else stays an observation.
+        version = int_field(data, "version", -1) if "version" in data else None
+        if version is not None and version >= 0 and "shielded" in data:
+            rt.store.set_lock_applied(version=version,
+                                      shielded=bool(data.get("shielded")),
+                                      error=text_field(data, "error")[:200])
         rt.transcript.append("phone", summary=", ".join(
             f"{k}={v}" for k, v in sorted(data.items()))[:300])
         return jsonify({"ok": True})
@@ -378,6 +387,7 @@ def create_app(rt) -> Flask:
             "until": rec["until_at"].isoformat(),
             "reason": rec.get("reason", ""),
             "active": active,
+            "version": int(rec.get("version", 0)),
             "starts_in_seconds": max(0, int((rec["from_at"] - now).total_seconds())),
             "seconds_left": max(0, int((rec["until_at"] - now).total_seconds())),
         }

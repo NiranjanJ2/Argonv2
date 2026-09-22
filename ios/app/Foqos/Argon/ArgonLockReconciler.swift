@@ -32,6 +32,19 @@ enum ArgonLockReconciler {
   /// Make the phone match `lock`. Safe to call on every refresh: it compares
   /// before it acts, so a wake with nothing to do costs a fetch and no writes.
   static func reconcile(_ lock: ArgonLock?, context: ModelContext) {
+    // The emergency release is checked first and locally. v1's rule: an escape
+    // hatch that needs a network is not an escape hatch. While it is engaged
+    // nothing is applied, whatever the server wants, and the refusal is
+    // reported so Argon knows the block did not land rather than assuming it
+    // did.
+    if let until = ArgonOverride.activeUntil, lock != nil {
+      ArgonLockWindow.disarm()
+      release(context: context)
+      report(lock, shielded: false,
+             error: "override until \(until.formatted(date: .omitted, time: .shortened))")
+      return
+    }
+
     // Arm the whole window with the system first, so the start and the end
     // happen on time even if this app never runs again between now and then.
     // Reconciling the Foqos session below is what makes the *current* state
@@ -40,6 +53,11 @@ enum ArgonLockReconciler {
        let start = lock.startsAt, let end = lock.endsAt {
       ArgonLockWindow.arm(from: start, until: end,
                           selection: lockSelection(in: context))
+      // Report the arming, not just the blocking. A lock booked for 20:30 is
+      // *handled* the moment the window is armed; without saying so the server
+      // reads "published, never confirmed" for an hour and Argon cannot tell
+      // him it is set up.
+      if !lock.isLive { report(lock, shielded: false, error: nil) }
     } else {
       ArgonLockWindow.disarm()
     }
@@ -52,12 +70,23 @@ enum ArgonLockReconciler {
     let active = StrategyManager.shared.activeSession
 
     if wanted, active == nil {
-      guard let profile = profile(in: context) else { return }
+      guard let profile = profile(in: context) else {
+        // Nothing to block with. Said out loud rather than swallowed: the
+        // commonest cause is setup never finished, and he can only fix what he
+        // is told about.
+        report(lock, shielded: false, error: "no blocking profile is set up")
+        return
+      }
       StrategyManager.shared.startSessionFromBackground(
         profile.id, context: context,
         durationInMinutes: max(1, (lock?.secondsLeft ?? 0) / 60))
       UserDefaults.standard.set(profile.id.uuidString, forKey: ownedKey)
+      report(lock, shielded: true, error: nil)
       return
+    }
+
+    if wanted, active != nil {
+      report(lock, shielded: true, error: nil)
     }
 
     if !wanted, let active {
@@ -70,6 +99,29 @@ enum ArgonLockReconciler {
         active.blockedProfile.id, context: context)
       UserDefaults.standard.removeObject(forKey: ownedKey)
     }
+  }
+
+  /// Tell the server what actually happened, success or failure.
+  ///
+  /// Keyed on the lock's version, so the server compares what it wanted with
+  /// what landed instead of guessing from silence.
+  private static func report(_ lock: ArgonLock?, shielded: Bool, error: String?) {
+    guard let lock else { return }
+    ArgonLog.note("lock", "v\(lock.version) shielded=\(shielded)"
+                  + (error.map { " — \($0)" } ?? ""))
+    Task { try? await ArgonAppDelegate.shared.client.reportLock(
+      version: lock.version, shielded: shielded, error: error) }
+  }
+
+  /// Drop whatever Argon raised, leaving anything he started himself alone.
+  private static func release(context: ModelContext) {
+    StrategyManager.shared.loadActiveSession(context: context)
+    guard let active = StrategyManager.shared.activeSession,
+          let owned = UserDefaults.standard.string(forKey: ownedKey),
+          owned == active.blockedProfile.id.uuidString else { return }
+    StrategyManager.shared.stopSessionFromBackground(
+      active.blockedProfile.id, context: context)
+    UserDefaults.standard.removeObject(forKey: ownedKey)
   }
 
   /// Marks the session as one Argon started, so releasing it later is allowed.

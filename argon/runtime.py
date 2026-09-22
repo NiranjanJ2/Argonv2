@@ -144,6 +144,8 @@ class Runtime:
         period = bell.current_period()
         if period:
             parts.append(f"He is in {period} right now.")
+        if (lock_line := self._lock_truth()):
+            parts.append(lock_line)
         if (quiet := self.store.quiet()) is not None:
             until, reason = quiet
             parts.append(
@@ -803,6 +805,9 @@ class Runtime:
                            starts=begins,
                            escalate_minutes=int(escalate_minutes),
                            escalations=int(escalations))
+            # A fresh lock is unconfirmed by definition; clear any stale
+            # report so the model is not told the *previous* lock's outcome.
+            self.store.set_lock_applied(version=-1, shielded=False)
             pushed = self.wake_phone("lock")
             when = ("now" if start_in_minutes < 1
                     else f"at {begins:%H:%M}")
@@ -974,6 +979,32 @@ class Runtime:
             return False
         self.transcript.append("brief_acked")
         return True
+
+    def _lock_truth(self) -> str:
+        """What is actually true about the phone, not what was asked for.
+
+        v1 kept the desired mode and the applied state in separate documents
+        and compared versions, precisely so Argon could not claim a block it
+        had only published. Without that it told him "locked for 60 minutes
+        starting 20:30" while the phone had never heard of it.
+        """
+        rec = self.store.lock_record()
+        if rec is None:
+            return ""
+        applied = self.store.lock_applied() or {}
+        wanted, got = rec.get("version", 0), applied.get("version", -1)
+        when = f"{rec['from_at']:%H:%M}–{rec['until_at']:%H:%M}"
+        if applied.get("error") and got == wanted:
+            return (f"LOCK {when} was REFUSED by the phone: {applied['error']}. "
+                    f"It is not blocking. Say so if it comes up; do not repeat "
+                    f"the request expecting a different answer.")
+        if got != wanted:
+            return (f"LOCK {when} is published but the phone has NOT confirmed "
+                    f"it. You may say you have asked for it; you may not say it "
+                    f"is on.")
+        return (f"LOCK {when} confirmed by the phone"
+                + (" and blocking now." if applied.get("shielded")
+                   else ", not blocking yet."))
 
     def publish_lock_transition(self) -> None:
         """Push the phone when the lock turns on or off by itself.
@@ -1309,6 +1340,34 @@ def _selftest() -> None:
         mine.begin_task(c.id)
         mine.end_task(c.id, done=True)
         assert mine.store.lock() is not None, "his own lock-in survives"
+
+        # Argon may not claim a lock the phone has not confirmed. v1 kept
+        # desired and applied apart and compared versions for exactly this.
+        truth = Runtime(config.Config())
+        truth.store.clear_lock()      # earlier cases share this store
+        assert truth._lock_truth() == "", "no lock, nothing to say"
+        truth.store.set_lock(clock.now() + timedelta(hours=1), "start work")
+        line = truth._lock_truth()
+        assert "NOT confirmed" in line and "may not say it is on" in line, line
+
+        v = truth.store.lock_record()["version"]
+        truth.store.set_lock_applied(version=v, shielded=True)
+        assert "confirmed by the phone and blocking now" in truth._lock_truth()
+
+        truth.store.set_lock_applied(version=v, shielded=False,
+                                     error="Screen Time not authorised")
+        assert "REFUSED" in truth._lock_truth()
+
+        # Extending must not bump the version: a new version makes the phone
+        # re-apply, and re-applying restarts the window being extended.
+        truth.store.set_lock(clock.now() + timedelta(minutes=5), "x",
+                             escalate_minutes=10, escalations=1)
+        before = truth.store.lock_record()["version"]
+        clock.set_for_test(clock.now() + timedelta(minutes=6))
+        truth.store.extend_lock(10)
+        assert truth.store.lock_record()["version"] == before, \
+            "extending in place must not look like a new lock"
+        clock.set_for_test(None)
 
         # A dead channel falls through to the next; a live one ends it. The
         # count matters: fanning out delivered the same sentence twice, once to
