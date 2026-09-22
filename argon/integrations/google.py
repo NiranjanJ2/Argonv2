@@ -449,9 +449,21 @@ def outstanding_assignments(account: str, days_back: int = DAYS_BACK,
     return out, refused
 
 
-#: How far back to read posted material. A teacher posts the day's work in the
-#: morning; by the third day it is no longer "what to do tonight".
-MATERIAL_DAYS_BACK = 3
+#: Posts older than this are history, not homework. v1's number.
+MATERIAL_DAYS_BACK = 7
+
+
+def _post_text(item: dict[str, Any]) -> str:
+    """The readable body of an announcement or a material post.
+
+    Title and body together: AP Lang's title is the day ("WEEK 6 - WED 9/16")
+    and the body is the work, so either alone is useless.
+    """
+    text = (item.get("text") or item.get("description") or "").strip()
+    title = (item.get("title") or "").strip()
+    if title and title.lower() not in text.lower():
+        text = f"{title}\n{text}".strip()
+    return text
 
 
 def recent_materials(account: str, days_back: int = MATERIAL_DAYS_BACK,
@@ -464,11 +476,12 @@ def recent_materials(account: str, days_back: int = MATERIAL_DAYS_BACK,
     skips the course entirely and the class reads as having no homework — which
     is the single worst thing this board can say, because he believes it.
 
-    These come back as context lines, never as tasks, and the distinction is
-    forced by the data: a material has no due date and no submission state, so
-    there is nothing that can ever mark it done. Made into tasks they would
-    pile up unfinishable forever. Stated as context the model can see "AP Lang
-    posted X today" and ask him about it, or call add_task if it is real work.
+    Deliberately not turned into tasks, which is v1's rule and his: a post is
+    prose, and inventing an assignment out of it is the one thing he has asked
+    Argon never to do. A scraper that minted tasks from the "HW:" block put the
+    same AP Lang work on the board twice under two spellings, because the
+    teacher had also created it properly as coursework. These are context for
+    answering "what do I have for Lang", not commitments.
     """
     svc = _service(account, "classroom", "v1")
     courses = {c["id"]: c.get("name", "?")
@@ -481,10 +494,10 @@ def recent_materials(account: str, days_back: int = MATERIAL_DAYS_BACK,
         for kind, call, state_arg, key, titler in (
             ("material", svc.courses().courseWorkMaterials(),
              "courseWorkMaterialStates", "courseWorkMaterial",
-             lambda i: i.get("title") or "(untitled)"),
+             _post_text),
             ("announcement", svc.courses().announcements(),
              "announcementStates", "announcements",
-             lambda i: " ".join((i.get("text") or "").split())[:120] or "(empty)"),
+             _post_text),
         ):
             try:
                 page = call.list(**{"courseId": cid, state_arg: ["PUBLISHED"],
@@ -495,8 +508,11 @@ def recent_materials(account: str, days_back: int = MATERIAL_DAYS_BACK,
                 at = _parse_rfc3339(item.get("updateTime") or item.get("creationTime"))
                 if at is None or at < floor:
                     continue
+                body = " ".join(titler(item).split())
+                if not body:
+                    continue
                 out.append({"course": tidy_course(name), "kind": kind,
-                            "title": titler(item), "at": at})
+                            "title": body[:300], "at": at})
     # Materials first, then recency. A material is a teacher posting the day's
     # actual work; an announcement is usually a club or the counselling office.
     # Sorted by recency alone, one busy day of "PSAT registration!" pushes AP
@@ -514,141 +530,6 @@ def _parse_rfc3339(value: str | None) -> datetime | None:
         return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone()
     except ValueError:
         return None
-
-
-#: The homework block inside a daily material post. AP Lang writes the day's
-#: agenda, then "HW:", then the work — so everything before it is classwork
-#: that is already done by the time he reads this.
-_HW_HEADER = re.compile(r"^\s*(?:HW|HOMEWORK)\s*:?\s*$", re.I | re.M)
-
-#: "by Fri., 9/18", "due Tues., 9/15", "due 9/18", "by 9/18".
-_HW_DUE = re.compile(r"\b(?:by|due)\b[^0-9]{0,12}(\d{1,2})\s*/\s*(\d{1,2})", re.I)
-
-#: "1. Read The Crucible Act 3" — the numbering AP Lang uses for each item.
-_HW_ITEM = re.compile(r"^\s*(?:\d+[.)]|[-*•])\s*(.+?)\s*$", re.M)
-
-
-def _hw_due_date(text: str, posted: datetime) -> str | None:
-    """The "by Fri., 9/18" inside one homework line, as YYYY-MM-DD.
-
-    The year is not written, so it comes from when the post went up: a 1/8 due
-    date on a December post is next January, not eleven months ago.
-    """
-    m = _HW_DUE.search(text)
-    if not m:
-        return None
-    month, day = int(m.group(1)), int(m.group(2))
-    if not (1 <= month <= 12 and 1 <= day <= 31):
-        return None
-    year = posted.year + (1 if month < posted.month - 6 else 0)
-    try:
-        return datetime(year, month, day, tzinfo=clock.TZ).strftime("%Y-%m-%d")
-    except ValueError:
-        return None
-
-
-
-
-#: Words that carry no identity in an assignment title.
-_TITLE_NOISE = frozenset("""the a an and or of for to in on at by with from due
-    hw homework read watch complete finish study review practice assignment
-    monday tuesday wednesday thursday friday""".split())
-
-
-def _words(title: str) -> set[str]:
-    return {w for w in re.findall(r"[0-9a-z\u3000-\u9fff]{2,}", title.lower())
-            if w not in _TITLE_NOISE}
-
-
-def _already_assigned(scraped: str, assigned: list[set[str]]) -> bool:
-    """Whether real coursework already covers this scraped line.
-
-    Matched on the distinctive words rather than the string, because the same
-    work is written two ways: the post says "9/21 MCQ Test Corrections" and the
-    assignment is called "9/21 MCQ Monday Test Corrections".
-    """
-    mine = _words(scraped)
-    if not mine:
-        return False
-    for theirs in assigned:
-        if not theirs:
-            continue
-        overlap = len(mine & theirs)
-        if overlap and overlap * 2 >= min(len(mine), len(theirs)):
-            return True
-    return False
-
-
-def material_homework(account: str, days_back: int = 10) -> list[dict[str, Any]]:
-    """Homework scraped out of daily material posts.
-
-    Some classes never create assignments. AP Lang posts one material a day —
-    "WEEK 6 - WED 9/16" — whose description carries the agenda and then an
-    "HW:" block. None of it is courseWork, so it has no submission and no due
-    date, `outstanding_assignments` never sees it, and the class reads as
-    having no homework at all. That is the worst thing this board can say,
-    because he believes it.
-
-    Only the HW block is taken. The lines above it are what happened in class
-    that day, already done by the time he reads this, and adding them would
-    bury the two lines that are actually work.
-
-    Deduplicated on the text itself, because the same item is repeated in every
-    post until it is due: "Read The Crucible Act 3 by Fri., 9/18" appears in
-    Monday's, Tuesday's, Wednesday's and Thursday's posts and is one task.
-    """
-    svc = _service(account, "classroom", "v1")
-    courses = {c["id"]: c.get("name", "?")
-               for c in svc.courses().list(
-                   courseStates=["ACTIVE"]).execute().get("courses", [])}
-    floor = clock.now() - timedelta(days=days_back)
-
-    seen: dict[str, dict[str, Any]] = {}
-    for cid, name in courses.items():
-        # What the course already assigns properly. A teacher who posts the
-        # week's agenda *and* creates the assignment would otherwise put the
-        # same work on the board twice under two spellings — AP Lang gave him
-        # "9/21 MCQ Monday Test Corrections" and "9/21 MCQ Test Corrections",
-        # which no amount of deduplicating scraped text against itself catches.
-        try:
-            assigned = [_words(w.get("title") or "")
-                        for w in _all_coursework(svc, cid)]
-        except Exception:  # noqa: BLE001
-            assigned = []
-        try:
-            page = svc.courses().courseWorkMaterials().list(
-                courseId=cid, courseWorkMaterialStates=["PUBLISHED"],
-                pageSize=30).execute()
-        except Exception:  # noqa: BLE001 - a locked course must not stop the rest
-            continue
-        for item in page.get("courseWorkMaterial", []):
-            posted = _parse_rfc3339(item.get("updateTime")
-                                    or item.get("creationTime"))
-            if posted is None or posted < floor:
-                continue
-            body = item.get("description") or ""
-            split = _HW_HEADER.split(body, maxsplit=1)
-            if len(split) < 2:
-                continue
-            for line in _HW_ITEM.findall(split[-1]):
-                title = " ".join(line.split())
-                if len(title) < 4:
-                    continue
-                key = f"{cid}:{title.lower()}"
-                if key in seen or _already_assigned(title, assigned):
-                    continue
-                seen[key] = {
-                    # sha1, not hash(): Python randomises string hashing per
-                    # process, so every restart minted new ids, the sync saw
-                    # them as new work, added them and closed yesterday's — the
-                    # same three AP Lang tasks added and completed on a loop.
-                    "id": "m" + hashlib.sha1(key.encode()).hexdigest()[:11],
-                    "title": _HW_DUE.sub("", title).strip(" .,;–—-") or title,
-                    "course": tidy_course(name),
-                    "due": _hw_due_date(title, posted),
-                    "courseId": cid,
-                }
-    return [v for v in seen.values() if v["due"]]
 
 
 def list_assignments(account: str, limit: int = 30, days_back: int = DAYS_BACK) -> str:
@@ -827,14 +708,15 @@ def _selftest() -> None:
             == "work_by_day"
         assert due_precision({}) == ""
 
-        # Scraped homework that the course also assigns properly is dropped.
-        # AP Lang put "9/21 MCQ Test Corrections" in its weekly post and
-        # created "9/21 MCQ Monday Test Corrections" as coursework; both
-        # reached his board, on the same day, as two separate tasks.
-        assigned = [_words("9/21 MCQ Monday Test Corrections")]
-        assert _already_assigned("9/21 MCQ Test Corrections", assigned)
-        assert not _already_assigned("Read The Crucible Act 4", assigned)
-        assert not _already_assigned("漢字フラッシュカード", assigned)
+        # A post carries its title and its body, because either alone is
+        # useless: AP Lang's title is the day and the body is the work.
+        assert _post_text({"title": "WEEK 6 - WED 9/16",
+                           "description": "HW: Read Act 3"}) \
+            == "WEEK 6 - WED 9/16\nHW: Read Act 3"
+        assert _post_text({"text": "Chapter 2 InQuizitive due tonight"}) \
+            == "Chapter 2 InQuizitive due tonight"
+        # A title already inside the body is not repeated.
+        assert _post_text({"title": "Quiz", "text": "Quiz on Friday"}) == "Quiz on Friday"
 
         assert format_events([]) == "Nothing on the calendar."
         line = format_events([{"summary": "Lab", "start": {"dateTime": "2026-09-14T15:00:00-07:00"}}])
