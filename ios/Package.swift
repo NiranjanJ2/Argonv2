@@ -38,6 +38,7 @@ let package = Package(
       sources: [
         "ArgonModels.swift",
         "ArgonClient.swift",
+        "ArgonLog.swift",
         "ArgonStore.swift",
         "ArgonOutbox.swift",
         "ArgonCache.swift",

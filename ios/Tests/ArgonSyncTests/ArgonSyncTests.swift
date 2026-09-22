@@ -40,7 +40,7 @@ private let stateJSON = """
  "ticking":true,"unread":0,"facts":[],
  "budget":{"spent":0.29,"cap":5.0,"cached_fraction":0.6},
  "tasks":[{"id":"t1","title":"AP Chem pset","due":"2026-09-01","done":false},
-          {"id":"t2","title":"Read Ch 3","due":"2026-09-20","done":false}]}
+          {"id":"t2","title":"Read Ch 3","due":"2099-09-20","done":false}]}
 """
 
 // MARK: - the outbox
