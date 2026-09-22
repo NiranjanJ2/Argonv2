@@ -79,6 +79,19 @@ def create_app(rt) -> Flask:
             # OverflowError is what `{"minutes": 1e999}` raises.
             return None
 
+    def replay() -> tuple[Any, int] | None:
+        key = (request.headers.get("Idempotency-Key") or "").strip()
+        if not key or len(key) > 200:
+            return None
+        cached = rt.store.idempotency_get(key)
+        return (jsonify(cached[0]), cached[1]) if cached else None
+
+    def remember(payload: dict[str, Any], status: int) -> tuple[Any, int]:
+        key = (request.headers.get("Idempotency-Key") or "").strip()
+        if key and len(key) <= 200:
+            rt.store.idempotency_put(key, payload, status)
+        return jsonify(payload), status
+
     def task_json(t) -> dict[str, Any]:
         """Exactly the keys ArgonTask decodes. Do not tidy these names."""
         return {
@@ -162,6 +175,8 @@ def create_app(rt) -> Flask:
     @app.post("/v1/tasks")
     @require_token
     def v1_add_task():
+        if cached := replay():
+            return cached
         data = body()
         title = text_field(data, "title")
         if not title:
@@ -173,7 +188,7 @@ def create_app(rt) -> Flask:
                               due=text_field(data, "due"),
                               priority=text_field(data, "priority") or "normal",
                               source="app")
-        return jsonify({"task": task_json(t)}), 201
+        return remember({"task": task_json(t)}, 201)
 
     @app.patch("/v1/tasks/<task_id>")
     @require_token
@@ -184,10 +199,18 @@ def create_app(rt) -> Flask:
         # that reached past that would block or unblock nothing.
         if data.get("done") is True:
             t = rt.end_task(task_id, done=True)
+            if t is None:
+                current = rt.store.task(task_id)
+                if current and current.done:
+                    t = current
             return (jsonify({"task": task_json(t)}) if t
                     else (jsonify({"error": "no such open task"}), 404))
         if data.get("started") is True:
             t = rt.begin_task(task_id)
+            if t is None:
+                current = rt.store.task(task_id)
+                if current and current.started and not current.done:
+                    t = current
             return (jsonify({"task": task_json(t)}) if t
                     else (jsonify({"error": "already started"}), 409))
         if data.get("started") is False:
@@ -478,6 +501,8 @@ def create_app(rt) -> Flask:
     @app.post("/v2/say")
     @require_token
     def v2_say():
+        if cached := replay():
+            return cached
         data = body()
         text = text_field(data, "text")
         if not text:
@@ -495,7 +520,7 @@ def create_app(rt) -> Flask:
             return jsonify({"reply": out.text or "", "spoke": out.spoke,
                             "cost": round(out.cost, 6), "error": out.error or None})
         seq = rt.receive_async(text, source=text_field(data, "source") or "ios")
-        return jsonify({"accepted": True, "seq": seq}), 202
+        return remember({"accepted": True, "seq": seq}, 202)
 
     @app.errorhandler(Exception)
     def on_error(exc: Exception):
@@ -567,11 +592,20 @@ def _selftest() -> None:
 
         r = c.post("/v1/tasks", json={"title": "Read Ch 3"}, headers=auth)
         assert r.status_code == 201 and r.get_json()["task"]["title"] == "Read Ch 3"
+        retry_headers = {**auth, "Idempotency-Key": "same-add"}
+        first = c.post("/v1/tasks", json={"title": "Only once"}, headers=retry_headers)
+        second = c.post("/v1/tasks", json={"title": "Only once"}, headers=retry_headers)
+        assert first.status_code == second.status_code == 201
+        assert first.get_json() == second.get_json()
+        assert sum(x.title == "Only once" for x in rt.store.tasks()) == 1
         assert c.post("/v1/tasks", json={}, headers=auth).status_code == 400
 
         assert c.patch(f"/v1/tasks/{t.id}", json={"started": True},
                        headers=auth).get_json()["task"]["started_at"]
+        assert c.patch(f"/v1/tasks/{t.id}", json={"started": True},
+                       headers=auth).status_code == 200
         assert c.get("/v1/status", headers=auth).get_json()["state"]["mode"] == "working"
+        assert c.patch(f"/v1/tasks/{t.id}", json={"done": True}, headers=auth).status_code == 200
         assert c.patch(f"/v1/tasks/{t.id}", json={"done": True}, headers=auth).status_code == 200
         assert c.patch("/v1/tasks/nope", json={"done": True}, headers=auth).status_code == 404
 

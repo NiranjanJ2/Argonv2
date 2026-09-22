@@ -83,11 +83,15 @@ actor ArgonClient {
   private func request(_ path: String, method: String = "GET",
                        query: [String: String] = [:],
                        body: [String: Any]? = nil,
+                       idempotencyKey: String? = nil,
                        timeout: TimeInterval = 20) async throws -> Data {
     var req = URLRequest(url: url(path: path, query: query))
     req.httpMethod = method
     req.timeoutInterval = timeout
     req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+    if let idempotencyKey {
+      req.setValue(idempotencyKey, forHTTPHeaderField: "Idempotency-Key")
+    }
     if let body {
       req.setValue("application/json", forHTTPHeaderField: "Content-Type")
       req.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -134,6 +138,7 @@ actor ArgonClient {
   // MARK: writes — one per PendingWrite.Kind, all returning or throwing
 
   func apply(_ write: PendingWrite) async throws {
+    let key = write.id.uuidString
     switch write.kind {
     case .start(let id):
       _ = try await request("v1/tasks/\(id)", method: "PATCH", body: ["started": true])
@@ -144,13 +149,15 @@ actor ArgonClient {
     case .add(let title, let due):
       var body: [String: Any] = ["title": title]
       if let due { body["due"] = due }
-      _ = try await request("v1/tasks", method: "POST", body: body)
+      _ = try await request("v1/tasks", method: "POST", body: body,
+                            idempotencyKey: key)
     case .say(let text):
       // The server accepts and answers on a worker, so this is a fast append
       // rather than the whole turn. It used to wait up to 120s with the bubble
       // stuck on "sending…", which is what made the chat feel like a poll.
       _ = try await request("v2/say", method: "POST",
-                            body: ["text": text, "source": "ios"], timeout: 20)
+                            body: ["text": text, "source": "ios"],
+                            idempotencyKey: key, timeout: 20)
     case .markRead:
       _ = try await request("v1/ios/read", method: "POST", body: [:])
     }

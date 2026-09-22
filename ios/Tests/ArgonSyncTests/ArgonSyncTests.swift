@@ -46,6 +46,19 @@ private let stateJSON = """
 // MARK: - the outbox
 
 final class OutboxTests: XCTestCase {
+  func testWriteIDIsSentAsIdempotencyKey() async throws {
+    var received: String?
+    StubProtocol.handler = { request in
+      received = request.value(forHTTPHeaderField: "Idempotency-Key")
+      return (201, Data(#"{"task":{}}"#.utf8))
+    }
+    let client = ArgonClient(base: URL(string: "http://stub")!, token: "t",
+                             session: StubProtocol.session)
+    let write = PendingWrite(.add(title: "Only once", due: nil))
+    try await client.apply(write)
+    XCTAssertEqual(received, write.id.uuidString)
+  }
+
   func testWritesSurviveTheAppDying() async {
     let name = tempName("survive")
     let first = ArgonOutbox(filename: name)

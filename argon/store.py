@@ -56,6 +56,12 @@ CREATE TABLE IF NOT EXISTS facts (
     until      TEXT,
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS idempotency (
+    key        TEXT PRIMARY KEY,
+    status     INTEGER NOT NULL,
+    response   TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
 """
 
 
@@ -173,6 +179,21 @@ class Store:
         self._db.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS tasks_external ON tasks (external_id)"
             " WHERE external_id IS NOT NULL")
+
+    def idempotency_get(self, key: str) -> tuple[dict[str, Any], int] | None:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT response,status FROM idempotency WHERE key=?", (key,)).fetchone()
+        return (json.loads(row["response"]), row["status"]) if row else None
+
+    def idempotency_put(self, key: str, response: dict[str, Any], status: int) -> None:
+        with self._lock:
+            self._db.execute(
+                "INSERT OR IGNORE INTO idempotency (key,status,response,created_at)"
+                " VALUES (?,?,?,?)",
+                (key, status, json.dumps(response, separators=(",", ":")),
+                 clock.now().isoformat()))
+            self._db.commit()
 
     # -- tasks ------------------------------------------------------------
     def add_task(self, title: str, *, subject: str = "", due: str = "",
