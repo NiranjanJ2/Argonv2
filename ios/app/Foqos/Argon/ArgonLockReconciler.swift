@@ -51,13 +51,23 @@ enum ArgonLockReconciler {
     // right; the schedule is what makes the boundaries right.
     if let lock, lock.secondsLeft > 0,
        let start = lock.startsAt, let end = lock.endsAt {
-      ArgonLockWindow.arm(from: start, until: end,
-                          selection: lockSelection(in: context))
+      let arm = ArgonLockWindow.arm(from: start, until: end,
+                                    selection: lockSelection(in: context))
       // Report the arming, not just the blocking. A lock booked for 20:30 is
       // *handled* the moment the window is armed; without saying so the server
       // reads "published, never confirmed" for an hour and Argon cannot tell
       // him it is set up.
-      if !lock.isLive { report(lock, shielded: false, error: nil) }
+      if !lock.isLive {
+        report(lock, shielded: false, error: arm.error)
+        return
+      }
+      // A live lock can survive a short-window scheduling rejection because
+      // the Foqos session below applies immediately. An empty profile cannot
+      // block anything by either route, so do not claim it did.
+      if !ArgonLockWindow.canApplyImmediately(after: arm) {
+        report(lock, shielded: false, error: arm.error)
+        return
+      }
     } else {
       ArgonLockWindow.disarm()
     }

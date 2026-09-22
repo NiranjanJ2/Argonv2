@@ -24,6 +24,28 @@ import ManagedSettings
 /// cannot: he overrode it, the agent lifted it, the window moved.
 enum ArgonLockWindow {
   static let activityName = DeviceActivityName("argon.lock")
+  static let emptySelectionError = "the blocking profile has no apps, categories, or websites"
+
+  enum ArmResult: Equatable {
+    case armed
+    case failed(String)
+
+    var error: String? {
+      if case .failed(let message) = self { return message }
+      return nil
+    }
+  }
+
+  static func armResult(hasSelection: Bool, schedulingError: String?) -> ArmResult {
+    guard hasSelection else {
+      return .failed(emptySelectionError)
+    }
+    return schedulingError.map(ArmResult.failed) ?? .armed
+  }
+
+  static func canApplyImmediately(after result: ArmResult) -> Bool {
+    result.error != emptySelectionError
+  }
 
   // os.Logger, not ArgonLog: this file is compiled into the DeviceActivity
   // extension too, and ArgonLog reaches the network client, which an extension
@@ -37,11 +59,21 @@ enum ArgonLockWindow {
   /// Arm the window. Idempotent: re-arming the same one is a no-op, because
   /// restarting monitoring restarts the interval and would re-apply a shield
   /// he has already overridden.
-  static func arm(from start: Date, until end: Date, selection: FamilyActivitySelection) {
-    guard end > Date() else { disarm(); return }
+  @discardableResult
+  static func arm(from start: Date, until end: Date,
+                  selection: FamilyActivitySelection) -> ArmResult {
+    guard end > Date() else {
+      disarm()
+      return .failed("the lock window already ended")
+    }
+    let hasSelection = !selection.applicationTokens.isEmpty
+      || !selection.categoryTokens.isEmpty
+      || !selection.webDomainTokens.isEmpty
+    let selectionResult = armResult(hasSelection: hasSelection, schedulingError: nil)
+    guard selectionResult == .armed else { return selectionResult }
     if stored() == Window(from: start, until: end),
        DeviceActivityCenter().activities.contains(activityName) {
-      return
+      return .armed
     }
 
     let cal = Calendar.current
@@ -60,10 +92,13 @@ enum ArgonLockWindow {
       try center.startMonitoring(activityName, during: schedule)
       Window(from: start, until: end).save(to: suiteName, key: windowKey)
       log.info("armed \(start, privacy: .public)–\(end, privacy: .public)")
+      return .armed
     } catch {
       // Report it rather than leaving him told he is locked. The commonest
       // cause is a window under fifteen minutes, which Screen Time refuses.
       log.error("arm failed: \(error.localizedDescription, privacy: .public)")
+      return armResult(hasSelection: true,
+                       schedulingError: error.localizedDescription)
     }
   }
 
