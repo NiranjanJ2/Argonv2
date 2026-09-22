@@ -31,16 +31,35 @@ final class ArgonPush: NSObject, UNUserNotificationCenterDelegate {
     UIApplication.shared.registerForRemoteNotifications()
   }
 
+  /// Recover registration on every launch. The local receipt cannot reveal
+  /// that the server lost its state, so launch deliberately uploads the stored
+  /// token again; the registration endpoint is idempotent.
+  func resumeAtLaunch() async {
+    let status = await UNUserNotificationCenter.current().notificationSettings()
+      .authorizationStatus
+    if status == .authorized || status == .provisional || status == .ephemeral {
+      UIApplication.shared.registerForRemoteNotifications()
+    }
+    await syncToken(force: true)
+  }
+
   /// Called from the app delegate with the raw token data.
   func registered(deviceToken: Data) {
     let hex = deviceToken.map { String(format: "%02x", $0) }.joined()
     UserDefaults.standard.set(hex, forKey: "argon.deviceToken")
-    UserDefaults.standard.set(false, forKey: Self.syncedKey)
+    UserDefaults.standard.removeObject(forKey: Self.receiptKey)
     Task { await syncToken() }
   }
 
   private static let tokenKey = "argon.deviceToken"
-  private static let syncedKey = "argon.deviceTokenSynced"
+  private static let receiptKey = "argon.deviceTokenReceipt"
+
+  private var serverIdentity: String {
+    let defaults = UserDefaults.standard
+    let token = defaults.string(forKey: "argon.token") ?? ArgonBridge.defaultToken
+    return ArgonRegistrationReceipt.serverIdentity(
+      base: ArgonBridge.resolvedBase(), token: token)
+  }
 
   /// Push the stored token to the server until it actually lands.
   ///
@@ -51,13 +70,18 @@ final class ArgonPush: NSObject, UNUserNotificationCenterDelegate {
   /// for push" until the next cold launch. The failure was invisible from both
   /// ends. Now the token is only marked synced when the server takes it, and
   /// anything that wakes the app retries.
-  func syncToken() async {
-    guard !UserDefaults.standard.bool(forKey: Self.syncedKey),
-          let hex = UserDefaults.standard.string(forKey: Self.tokenKey),
+  func syncToken(force: Bool = false) async {
+    let defaults = UserDefaults.standard
+    let identity = serverIdentity
+    guard let hex = defaults.string(forKey: Self.tokenKey),
           !hex.isEmpty else { return }
+    guard force || ArgonRegistrationReceipt.needsUpload(
+      storedReceipt: defaults.string(forKey: Self.receiptKey),
+      serverIdentity: identity) else { return }
     do {
       try await client.register(deviceToken: hex)
-      UserDefaults.standard.set(true, forKey: Self.syncedKey)
+      defaults.set(identity, forKey: Self.receiptKey)
+      defaults.removeObject(forKey: "argon.deviceTokenSynced")
     } catch {
       print("[argon] device registration deferred: \(error.localizedDescription)")
     }

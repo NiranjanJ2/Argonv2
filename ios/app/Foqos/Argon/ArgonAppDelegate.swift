@@ -17,7 +17,19 @@ import UIKit
 /// - `BGAppRefreshTask`, so the board is current when he next opens it
 @MainActor
 final class ArgonAppDelegate: NSObject, UIApplicationDelegate {
-  static let shared = ArgonAppDelegate()
+  private static weak var installed: ArgonAppDelegate?
+  static var shared: ArgonAppDelegate {
+    guard let installed else {
+      preconditionFailure("ArgonAppDelegate used before SwiftUI installed it")
+    }
+    return installed
+  }
+
+  override init() {
+    super.init()
+    precondition(Self.installed == nil, "ArgonAppDelegate must have one instance")
+    Self.installed = self
+  }
 
   /// Must match the `BGTaskSchedulerPermittedIdentifiers` entry in Info.plist.
   static let refreshTaskID = "com.niranjanj.argon.refresh"
@@ -81,7 +93,10 @@ final class ArgonAppDelegate: NSObject, UIApplicationDelegate {
       guard let task = task as? BGAppRefreshTask else { return }
       Task { @MainActor in self.handle(task) }
     }
-    Task { await store.refresh() }
+    Task {
+      await push.resumeAtLaunch()
+      await store.refresh()
+    }
     return true
   }
 

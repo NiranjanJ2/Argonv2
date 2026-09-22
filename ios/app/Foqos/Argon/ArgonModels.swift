@@ -1,5 +1,27 @@
 import Foundation
 
+/// Receipt proving which server accepted the current APNs token.
+///
+/// A boolean survives server resets and address changes, so the phone can say
+/// "already synced" while the active server has no device. The receipt is tied
+/// to the destination without storing the API token itself.
+enum ArgonRegistrationReceipt {
+  static func needsUpload(storedReceipt: String?, serverIdentity: String) -> Bool {
+    storedReceipt != serverIdentity
+  }
+
+  static func serverIdentity(base: String, token: String) -> String {
+    // Stable FNV-1a is sufficient here: this is an invalidation fingerprint,
+    // not authentication. The actual token remains only in its existing store.
+    var hash: UInt64 = 14_695_981_039_346_656_037
+    for byte in Data("\(base)\u{0}\(token)".utf8) {
+      hash ^= UInt64(byte)
+      hash &*= 1_099_511_628_211
+    }
+    return String(hash, radix: 16)
+  }
+}
+
 /// Everything the server sends, decoded once.
 ///
 /// Every field is optional-tolerant on purpose. The two halves of this system

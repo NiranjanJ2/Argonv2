@@ -116,6 +116,22 @@ final class FailureTests: XCTestCase {
   }
 }
 
+// MARK: - push registration receipt
+
+final class RegistrationReceiptTests: XCTestCase {
+  func testMissingOrDifferentServerReceiptRequiresRegistration() {
+    XCTAssertTrue(ArgonRegistrationReceipt.needsUpload(
+      storedReceipt: nil, serverIdentity: "server-b"))
+    XCTAssertTrue(ArgonRegistrationReceipt.needsUpload(
+      storedReceipt: "server-a", serverIdentity: "server-b"))
+  }
+
+  func testMatchingServerReceiptSkipsRedundantUpload() {
+    XCTAssertFalse(ArgonRegistrationReceipt.needsUpload(
+      storedReceipt: "server-a", serverIdentity: "server-a"))
+  }
+}
+
 // MARK: - the store
 
 @MainActor
