@@ -142,16 +142,27 @@ struct ArgonBudget: Codable, Equatable {
 /// `secondsLeft` is computed server-side, so a phone that wakes after the lock
 /// lapsed releases instead of holding the shield up on a stale boolean.
 struct ArgonLock: Codable, Equatable {
+  var from: String
   var until: String
   var reason: String
+  var active: Bool
+  var startsInSeconds: Int
   var secondsLeft: Int
 
   enum CodingKeys: String, CodingKey {
-    case until, reason
+    case from, until, reason, active
+    case startsInSeconds = "starts_in_seconds"
     case secondsLeft = "seconds_left"
   }
 
-  var isLive: Bool { secondsLeft > 0 }
+  /// Blocking right now.
+  var isLive: Bool { active && secondsLeft > 0 }
+  /// Booked, but not yet. The phone arms the window so iOS opens it on time
+  /// rather than waiting for a push that may never arrive.
+  var isScheduled: Bool { !active && secondsLeft > 0 }
+
+  var startsAt: Date? { ArgonDate.parse(from) }
+  var endsAt: Date? { ArgonDate.parse(until) }
 }
 
 /// The afternoon brief, as something he opens the app to read.

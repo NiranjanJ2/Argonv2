@@ -159,6 +159,7 @@
 				Models/SoftUnblockGrant.swift,
 				Argon/ArgonRoutineActivity.swift,
 				Argon/ArgonMetered.swift,
+				Argon/ArgonLockWindow.swift,
 				Models/Timers/BreakTimerActivity.swift,
 				Models/Timers/PauseTimerActivity.swift,
 				Models/Timers/ScheduleTimerActivity.swift,

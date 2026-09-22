@@ -243,6 +243,25 @@ extension SharedData {
     meteredSuite?.set(data, forKey: meteredSelectionKey)
   }
 
+  /// The apps a *lock* shields. Separate from the metered set on purpose: the
+  /// weekend list is what he rations, and a lock-in blocks the whole blocked
+  /// profile. Sharing one key made changing his weekend apps quietly change
+  /// what a lock covers.
+  static func setArgonLockSelection(_ selection: FamilyActivitySelection?) {
+    guard let selection, let data = try? JSONEncoder().encode(selection) else {
+      meteredSuite?.removeObject(forKey: lockSelectionKey)
+      return
+    }
+    meteredSuite?.set(data, forKey: lockSelectionKey)
+  }
+
+  static func argonLockSelection() -> FamilyActivitySelection? {
+    guard let data = meteredSuite?.data(forKey: lockSelectionKey) else { return nil }
+    return try? JSONDecoder().decode(FamilyActivitySelection.self, from: data)
+  }
+
+  private static let lockSelectionKey = "argon.lock.selection"
+
   static func argonMeteredSelection() -> FamilyActivitySelection? {
     guard let data = meteredSuite?.data(forKey: meteredSelectionKey) else { return nil }
     return try? JSONDecoder().decode(FamilyActivitySelection.self, from: data)

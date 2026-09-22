@@ -355,18 +355,32 @@ def create_app(rt) -> Flask:
 
     # -- clean v2 ---------------------------------------------------------
     def lock_json() -> dict[str, Any] | None:
-        """The lock the phone reconciles against, or None.
+        """The lock window the phone enforces, live or still to come.
 
-        Expiry is computed here rather than sent as a flag the phone has to
-        re-evaluate: a phone that wakes after the lock lapsed must release, and
-        a boolean frozen at publish time would hold it shut instead.
+        The *window* goes over, not a boolean. A scheduled lock used to be
+        invisible until the second it began, so "block at 8:30" depended on a
+        push landing at 8:30 — and if the phone was asleep or the push was
+        throttled, nothing happened at all. Given both ends, the phone arms the
+        window itself and iOS enforces it with the app closed.
+
+        Expiry is still computed here so a phone that wakes after the lock
+        lapsed releases rather than sitting on a stale boolean.
         """
-        live = rt.store.lock()
-        if live is None:
+        rec = rt.store.lock_record()
+        if rec is None:
             return None
-        until, reason = live
-        return {"until": until.isoformat(), "reason": reason,
-                "seconds_left": max(0, int((until - clock.now()).total_seconds()))}
+        now = clock.now()
+        if now >= rec["until_at"]:
+            return None                       # lapsed; nothing to enforce
+        active = rec["from_at"] <= now
+        return {
+            "from": rec["from_at"].isoformat(),
+            "until": rec["until_at"].isoformat(),
+            "reason": rec.get("reason", ""),
+            "active": active,
+            "starts_in_seconds": max(0, int((rec["from_at"] - now).total_seconds())),
+            "seconds_left": max(0, int((rec["until_at"] - now).total_seconds())),
+        }
 
     @app.get("/v2/state")
     @require_token

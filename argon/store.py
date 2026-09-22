@@ -149,10 +149,6 @@ class Store:
         # must never undo his, and without recording the difference the two are
         # indistinguishable the moment the row is written.
         ("tasks", "done_by", "TEXT"),
-        # Set when he moves a due date himself. Classroom re-import refreshes
-        # dates on every sync, which silently undid "make it due today" — the
-        # same failure as the sync reopening tasks he had ticked off.
-        ("tasks", "due_pinned", "INTEGER"),
     )
 
     def _migrate(self) -> None:
@@ -185,13 +181,13 @@ class Store:
                     # walked back every checkmark he made, twenty of them in
                     # one evening, each one a PATCH the server answered 200.
                     self.reopen_task(existing.id)
-                # His due date wins. He said "move the Japanese worksheet to
-                # today", it was moved, and the next sync put it back to
-                # Classroom's date — he noticed only because he went looking
-                # for it. The import may still correct the title and subject.
-                keep_due = self._due_pinned(existing.id)
-                return self.update_task(existing.id,
-                                        due=None if keep_due else (due or None),
+                # Classroom owns the date, deliberately. He asked for the
+                # Japanese worksheet "for today", it was moved, and the sync put
+                # 09-24 back — and that is the behaviour he wants: the teacher's
+                # deadline is the real one and a date typed in passing should
+                # not outrank it. What was missing is being *told*; see
+                # update_task in the runtime.
+                return self.update_task(existing.id, due=due or None,
                                         title=title, subject=subject or None) \
                     or self.task(existing.id) or existing
         tid = uuid.uuid4().hex[:12]
@@ -293,18 +289,6 @@ class Store:
             title = row["title"]
         self._t.append("task_done", id=tid, summary=title)
         return self.task(tid)
-
-    def _due_pinned(self, tid: str) -> bool:
-        with self._lock:
-            row = self._db.execute(
-                "SELECT due_pinned FROM tasks WHERE id=?", (tid,)).fetchone()
-        return bool(row and row["due_pinned"])
-
-    def pin_due(self, tid: str) -> None:
-        """Mark a due date as his, not Classroom's."""
-        with self._lock:
-            self._db.execute("UPDATE tasks SET due_pinned=1 WHERE id=?", (tid,))
-            self._db.commit()
 
     def _closed_by(self, tid: str) -> str | None:
         with self._lock:
@@ -449,24 +433,49 @@ class Store:
                 (json.dumps(units),))
             self._db.commit()
 
-    def set_lock(self, until: datetime, reason: str) -> None:
+    def set_lock(self, until: datetime, reason: str, *,
+                 starts: datetime | None = None,
+                 escalate_minutes: int = 0, escalations: int = 0,
+                 source: str = "him", task_id: str = "") -> None:
         """Publish a phone lock the app applies on its next wake.
 
         State, not a command. The server cannot reach into the phone; it can
         only say what it wants to be true, and the app reconciles when it next
         runs. That means a lock is best-effort and may land late — see the
-        reconcile in ArgonStore for what iOS actually guarantees.
+        reconcile in ArgonLockReconciler for what iOS actually guarantees.
+
+        *starts* schedules it. "Can you start blocking at 8:30" was answered
+        with "locked for 60 minutes starting 20:30" and then a lock that began
+        that second, because the tool could only lock now — the sentence and
+        the action disagreed and only the sentence reached him.
+
+        *escalate_minutes* and *escalations* are the "block until I get
+        started" case: when the window lapses and he still has not begun
+        anything, it extends itself rather than quietly letting go.
         """
         with self._lock:
             self._db.execute(
                 "INSERT OR REPLACE INTO settings (key, value) VALUES ('lock', ?)",
-                (json.dumps({"until": until.isoformat(), "reason": reason}),))
+                (json.dumps({
+                    "from": (starts or clock.now()).isoformat(),
+                    "until": until.isoformat(),
+                    "reason": reason,
+                    "escalate_minutes": max(0, int(escalate_minutes)),
+                    "escalations_left": max(0, int(escalations)),
+                    # Who raised it. A block a *task* imposed is cleared by
+                    # finishing that task; a lock he asked for himself survives
+                    # it. Matching on the reason text instead meant renaming an
+                    # assignment silently orphaned its block.
+                    "source": source,
+                    "task_id": task_id,
+                }),))
             self._db.commit()
-        self._t.append("lock_set", summary=f"until {until:%H:%M} — {reason}"[:200])
+        when = "" if starts is None else f" from {starts:%H:%M}"
+        self._t.append("lock_set",
+                       summary=f"{when} until {until:%H:%M} — {reason}".strip()[:200])
 
-    def lock(self) -> tuple[datetime, str] | None:
-        """The live lock, or None once it has lapsed. Expiry is read-time, so a
-        lock ends on its own even if nothing runs to clear it."""
+    def lock_record(self) -> dict | None:
+        """The stored lock, live or not, or None if there is none."""
         with self._lock:
             row = self._db.execute(
                 "SELECT value FROM settings WHERE key='lock'").fetchone()
@@ -474,10 +483,45 @@ class Store:
             return None
         try:
             data = json.loads(row["value"])
-            until = datetime.fromisoformat(data["until"])
+            data["until_at"] = datetime.fromisoformat(data["until"])
+            data["from_at"] = datetime.fromisoformat(
+                data.get("from") or data["until"])
         except (json.JSONDecodeError, KeyError, ValueError):
             return None
-        return (until, data.get("reason", "")) if until > clock.now() else None
+        return data
+
+    def lock(self) -> tuple[datetime, str] | None:
+        """The lock in force *right now*, or None.
+
+        A scheduled lock that has not started yet is not in force, and neither
+        is one that has lapsed — expiry is read-time so a lock ends on its own
+        even if nothing runs to clear it.
+        """
+        rec = self.lock_record()
+        if rec is None:
+            return None
+        now = clock.now()
+        if rec["from_at"] <= now < rec["until_at"]:
+            return (rec["until_at"], rec.get("reason", ""))
+        return None
+
+    def extend_lock(self, minutes: int) -> datetime | None:
+        """Push a lapsed lock out, spending one escalation."""
+        rec = self.lock_record()
+        if rec is None or rec.get("escalations_left", 0) <= 0:
+            return None
+        until = rec["until_at"] + timedelta(minutes=minutes)
+        with self._lock:
+            self._db.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES ('lock', ?)",
+                (json.dumps({**{k: v for k, v in rec.items()
+                                if k not in ("until_at", "from_at")},
+                             "until": until.isoformat(),
+                             "escalations_left": rec["escalations_left"] - 1}),))
+            self._db.commit()
+        self._t.append("lock_extended",
+                       summary=f"to {until:%H:%M}, {rec['escalations_left'] - 1} left")
+        return until
 
     def clear_lock(self, why: str = "cleared") -> None:
         with self._lock:
@@ -579,21 +623,15 @@ def _selftest() -> None:
                             due="2026-09-13")
         assert again3.done is True, "the sync must not undo his own checkmark"
 
-        # A due date he set by hand survives the next import. He asked for the
-        # Japanese worksheet to be due today, it was, and half an hour later
-        # Classroom's date was back.
+        # Classroom owns the date on Classroom work. A date typed in passing
+        # does not outrank the teacher's deadline — he was asked and said the
+        # revert was what he wanted.
         moved = s.add_task("HW 18", source="classroom", external_id="cw-18",
                            due="2026-09-30")
         s.update_task(moved.id, due="2026-09-21")
-        s.pin_due(moved.id)
         s.add_task("HW 18", source="classroom", external_id="cw-18",
                    due="2026-09-30")
-        assert s.task(moved.id).due == "2026-09-21", "his date must outrank Classroom's"
-        # The import may still fix the title on a pinned task.
-        s.add_task("HW 18 (revised)", source="classroom", external_id="cw-18",
-                   due="2026-09-30")
-        assert s.task(moved.id).title == "HW 18 (revised)"
-        assert s.task(moved.id).due == "2026-09-21"
+        assert s.task(moved.id).due == "2026-09-30", "the import restores the real date"
         assert "task_reopened" in [e.kind for e in t.window(2)]
 
         assert s.complete_task(a.id).done is True
@@ -683,6 +721,26 @@ def _selftest() -> None:
         s.set_lock(clock.now() + timedelta(minutes=30), "homework")
         s.clear_lock("he asked out")
         assert s.lock() is None
+
+        # A scheduled lock is not in force until it starts. "Blocking at 8:30"
+        # was answered with a lock that began that second.
+        begins = clock.now() + timedelta(minutes=60)
+        s.set_lock(begins + timedelta(minutes=60), "start work", starts=begins,
+                   escalate_minutes=30, escalations=2)
+        assert s.lock() is None, "a lock that starts in an hour is not on now"
+        clock.set_for_test(begins + timedelta(minutes=1))
+        assert s.lock() is not None, "and is on once it starts"
+
+        # It extends itself when it lapses, a bounded number of times.
+        clock.set_for_test(begins + timedelta(minutes=61))
+        assert s.lock() is None, "lapsed"
+        assert s.extend_lock(30) is not None
+        assert s.lock() is not None, "and comes back extended"
+        clock.set_for_test(begins + timedelta(minutes=91))
+        assert s.extend_lock(30) is not None
+        assert s.extend_lock(30) is None, "escalations are bounded"
+        clock.set_for_test(None)
+        s.clear_lock()
 
         clock.set_for_test(None)
         # An older database must survive the upgrade rather than refuse to open.

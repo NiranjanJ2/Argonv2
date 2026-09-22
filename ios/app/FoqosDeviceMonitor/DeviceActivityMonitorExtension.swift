@@ -37,6 +37,14 @@ class DeviceActivityMonitorExtension: DeviceActivityMonitor {
       return
     }
 
+    // A lock window opening. iOS runs this whether or not the app is alive,
+    // which is the point: a lock that only applies when a silent push happens
+    // to land on time is not a lock.
+    if activity == ArgonLockWindow.activityName {
+      ArgonLockWindow.raiseShield()
+      return
+    }
+
     TimerActivityUtil.startTimerActivity(for: activity)
   }
 
@@ -44,6 +52,12 @@ class DeviceActivityMonitorExtension: DeviceActivityMonitor {
     super.intervalDidEnd(for: activity)
 
     log.info("intervalDidEnd for activity: \(activity.rawValue)")
+    // The window closed on its own. This is what releases him when the server
+    // is unreachable or the phone never woke to be told.
+    if activity == ArgonLockWindow.activityName {
+      ArgonLockWindow.clearShield()
+      return
+    }
     guard activity != ArgonMetered.activityName else { return }
     TimerActivityUtil.stopTimerActivity(for: activity)
   }

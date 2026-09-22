@@ -51,6 +51,10 @@ EVENT_URGENT_MINUTES = 30
 #: phone overnight.
 TASK_LOCK_HOURS = 4
 
+#: Renew a task's block when it is this close to lapsing, so a long session
+#: never has the shield drop out from under it mid-work.
+RENEW_WITHIN_MINUTES = 30
+
 
 def system_prompt() -> str:
     """Static for the whole day, so it caches.
@@ -82,6 +86,9 @@ class Runtime:
         self._agenda_cache: list[str] = []
         self._agenda_events: list[dict] = []
         self._agenda_at: datetime | None = None
+        #: What the phone was last told about the lock, so a change driven by
+        #: the clock alone still reaches it.
+        self._lock_was_live = False
         self._posted_cache: list[str] = []
         self._posted_at: datetime | None = None
         self._channels: list = []
@@ -390,8 +397,15 @@ class Runtime:
         task = self.store.start_task(tid)
         if task is None:
             return None
-        until = clock.now() + timedelta(hours=TASK_LOCK_HOURS)
-        self.store.set_lock(until, f"working on {task.title}"[:120])
+        # Never over-write a lock he set himself. Starting a task used to
+        # replace it with a task lock, which finishing that task then cleared —
+        # so ticking something off silently ended a lock-in he had asked for.
+        held = self.store.lock_record()
+        if not (held and held.get("source") == "him"
+                and held["from_at"] <= clock.now() < held["until_at"]):
+            until = clock.now() + timedelta(hours=TASK_LOCK_HOURS)
+            self.store.set_lock(until, f"working on {task.title}"[:120],
+                                source="task", task_id=task.id)
         self.wake_phone("task started")
         return task
 
@@ -404,8 +418,8 @@ class Runtime:
         # Only lift a lock that this task raised. He may have asked for a
         # lock-in separately, and finishing one assignment is not a reason to
         # unblock his phone for the rest of the evening.
-        live = self.store.lock()
-        if live is not None and live[1] == f"working on {task.title}"[:120]:
+        rec = self.store.lock_record()
+        if rec and rec.get("source") == "task" and rec.get("task_id") == task.id:
             self.store.clear_lock("the task it was raised for ended")
         self.wake_phone("task ended")
         return task
@@ -687,11 +701,15 @@ class Runtime:
             if found is None:
                 return f"No task matching {task!r}."
             updated = store.update_task(found.id, **changes)
-            if updated and changes.get("due"):
-                # A date he chose outranks Classroom's. Without pinning it, the
-                # next sync half an hour later put it back and he was left
-                # asking why the task he had just moved was not where he put it.
-                store.pin_due(found.id)
+            if updated and changes.get("due") and updated.source == "classroom":
+                # Say so now rather than letting him find out. Classroom owns
+                # the date on Classroom work and the next sync restores it —
+                # which is what he wants — but moving it silently meant he went
+                # looking for a task that was not where he had just put it.
+                return (f"updated {updated.title}, but it is Classroom work: the "
+                        f"next sync restores the teacher's date "
+                        f"({updated.due}). Tell him that rather than implying "
+                        f"the move sticks.")
             return f"updated {updated.title}" if updated else "nothing to change"
 
         t.add("complete_task", "Mark a task done. Only when he says it is done.",
@@ -769,16 +787,35 @@ class Runtime:
             return (f"Standing down until {until:%a %H:%M}. You will not be woken "
                     f"before then. This is recorded — do not message him about it.")
 
-        def lock_phone(minutes: float = 60, reason: str = "") -> str:
+        def lock_phone(minutes: float = 60, reason: str = "",
+                       start_in_minutes: float = 0,
+                       escalate_minutes: float = 0,
+                       escalations: float = 0) -> str:
             if not 5 <= minutes <= 8 * 60:
                 return "Error: minutes must be between 5 and 480."
-            until = clock.now() + timedelta(minutes=float(minutes))
-            store.set_lock(until, reason or "he asked to be locked in")
+            if not 0 <= start_in_minutes <= 12 * 60:
+                return "Error: start_in_minutes must be between 0 and 720."
+            if escalations and not escalate_minutes:
+                return "Error: escalations needs escalate_minutes."
+            begins = clock.now() + timedelta(minutes=float(start_in_minutes))
+            until = begins + timedelta(minutes=float(minutes))
+            store.set_lock(until, reason or "he asked to be locked in",
+                           starts=begins,
+                           escalate_minutes=int(escalate_minutes),
+                           escalations=int(escalations))
             pushed = self.wake_phone("lock")
+            when = ("now" if start_in_minutes < 1
+                    else f"at {begins:%H:%M}")
+            tail = ""
+            if escalations and escalate_minutes:
+                tail = (f" If he has not started anything by {until:%H:%M} it "
+                        f"extends by {int(escalate_minutes)} minutes, up to "
+                        f"{int(escalations)} more time(s); starting a task ends "
+                        f"it early.")
             return (
-                f"Lock published until {until:%H:%M}. "
-                + ("The phone was pushed to apply it now — but a push is a "
-                   "request, not a receipt, so still do not tell him it is on."
+                f"Lock published: starts {when}, until {until:%H:%M}.{tail} "
+                + ("The phone was pushed to apply it — but a push is a request, "
+                   "not a receipt, so do not tell him it is on."
                    if pushed else
                    "The phone could not be pushed, so it applies on its next "
                    "wake, which may be hours. Do not tell him it is on.")
@@ -824,13 +861,25 @@ class Runtime:
         t.add("resume", "Come back on watch before the stand-down expires.", resume)
 
         t.add("lock_phone",
-              "Block his distracting apps for a while. Publishes the lock; the "
-              "phone applies it on its next wake, so it is never instant and you "
-              "must not tell him it already is. Only when he asks or has agreed "
-              "to it — locking him out unasked is how the app gets deleted.",
+              "Block his distracting apps. Publishes the lock; the phone "
+              "applies it on its next wake, so it is never instant and you must "
+              "not tell him it already is. Can start later and can extend "
+              "itself — say only what you actually set here, never a schedule "
+              "the call did not include. Only when he asks or has agreed: "
+              "locking him out unasked is how the app gets deleted.",
               lock_phone,
               params={"minutes": {"type": "number", "description": "5 to 480"},
-                      "reason": {"type": "string"}})
+                      "reason": {"type": "string"},
+                      "start_in_minutes": {
+                          "type": "number",
+                          "description": "delay before it begins; 0 is now"},
+                      "escalate_minutes": {
+                          "type": "number",
+                          "description": "extend by this if he still has not "
+                                         "started when it lapses"},
+                      "escalations": {
+                          "type": "number",
+                          "description": "how many times it may extend"}})
         t.add("unlock_phone", "Lift a lock you set.", unlock_phone)
 
         t.add("sync_classroom",
@@ -883,6 +932,8 @@ class Runtime:
                 return None
         if self._announce_budget_stop():
             return None
+        self.renew_task_lock()
+        self.escalate_lock_if_idle()
         self.transcript.append("tick")
         brief = self.brief_due()
         out = self.turn(background=True, extra=self._brief_instruction() if brief else "")
@@ -923,6 +974,67 @@ class Runtime:
             return False
         self.transcript.append("brief_acked")
         return True
+
+    def publish_lock_transition(self) -> None:
+        """Push the phone when the lock turns on or off by itself.
+
+        Every other path pushes because something called it. These two happen
+        because time passed: a lock published at 19:28 to begin at 20:30 sent
+        its only push at 19:28, and a lock that simply lapses sends none at
+        all — so the shield stayed up until the phone next happened to wake.
+        """
+        rec = self.store.lock_record()
+        now = clock.now()
+        live = bool(rec and rec["from_at"] <= now < rec["until_at"])
+        if live == self._lock_was_live:
+            return
+        self._lock_was_live = live
+        self.wake_phone("lock started" if live else "lock ended")
+
+    def renew_task_lock(self) -> None:
+        """Keep a running task's block alive while he is still on it.
+
+        v1 renewed on every status read, for the reason the fixed window gets
+        wrong: a session that runs past the window drops the shield underneath
+        him mid-work, and he did not stop, so nothing told it to. Renewed only
+        while the task that raised it is still started — the moment he stops or
+        finishes, end_task clears it instead.
+        """
+        rec = self.store.lock_record()
+        if rec is None or rec.get("source") != "task":
+            return
+        task = self.store.task(rec.get("task_id") or "")
+        if task is None or task.done or not task.started:
+            return
+        if (rec["until_at"] - clock.now()).total_seconds() > RENEW_WITHIN_MINUTES * 60:
+            return
+        self.store.set_lock(clock.now() + timedelta(hours=TASK_LOCK_HOURS),
+                            rec.get("reason", "working"),
+                            source="task", task_id=task.id)
+        self.wake_phone("lock renewed")
+
+    def escalate_lock_if_idle(self) -> None:
+        """Extend a lapsed "until you start" lock when nothing has begun.
+
+        The agent promised this out loud — "I'll extend by 30 minutes up to two
+        times if you haven't said you started" — with no mechanism behind it.
+        Either the promise goes or the mechanism does; he wanted the mechanism.
+
+        Starting anything ends it, which is the whole point: the lock exists to
+        get him started, so the moment he does it has done its job.
+        """
+        rec = self.store.lock_record()
+        if rec is None or rec.get("escalations_left", 0) <= 0:
+            return
+        now = clock.now()
+        if now < rec["until_at"]:
+            return                      # still in force, nothing to do
+        if any(t.started for t in self.store.tasks()):
+            self.store.clear_lock("he started something")
+            self.wake_phone("unlock")
+            return
+        if self.store.extend_lock(int(rec["escalate_minutes"])):
+            self.wake_phone("lock extended")
 
     def brief_due(self) -> bool:
         """Whether the after-school brief still owes him one today.
@@ -990,6 +1102,10 @@ class Runtime:
         while not self._stop.is_set():
             started = time.monotonic()
             try:
+                # Outside the tick gate on purpose. A lock starting or lapsing
+                # is a clock event, not a conversation, and the evening window
+                # has nothing to do with whether the phone needs telling.
+                self.publish_lock_transition()
                 self.tick_once()
             except Exception as e:  # noqa: BLE001 - a bad tick must not end the loop
                 self.transcript.append("tick_failed", summary=repr(e))
@@ -1171,6 +1287,28 @@ def _selftest() -> None:
         assert card and card["text"].startswith("Two things") and card["acked"] is False
         assert carded.ack_brief() is True
         assert carded.brief_card()["acked"] is True, "dismissal survives the next read"
+
+        # A task's block belongs to that task. Finishing it clears it;
+        # finishing a different one does not, and neither does the task's
+        # title changing underneath it.
+        owner = Runtime(config.Config())
+        a = owner.store.add_task("Essay")
+        b = owner.store.add_task("Reading")
+        owner.begin_task(a.id)
+        assert owner.store.lock() is not None
+        owner.end_task(b.id, done=True)
+        assert owner.store.lock() is not None, "another task must not lift it"
+        owner.store.update_task(a.id, title="Essay (revised)")
+        owner.end_task(a.id, done=True)
+        assert owner.store.lock() is None, "its own task lifts it, renamed or not"
+
+        # A lock he asked for himself outlives a task ending.
+        mine = Runtime(config.Config())
+        c = mine.store.add_task("Essay")
+        mine.store.set_lock(clock.now() + timedelta(hours=1), "he asked")
+        mine.begin_task(c.id)
+        mine.end_task(c.id, done=True)
+        assert mine.store.lock() is not None, "his own lock-in survives"
 
         # A dead channel falls through to the next; a live one ends it. The
         # count matters: fanning out delivered the same sentence twice, once to

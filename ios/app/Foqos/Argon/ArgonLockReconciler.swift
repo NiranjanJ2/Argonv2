@@ -1,3 +1,4 @@
+import FamilyControls
 import Foundation
 import SwiftData
 
@@ -31,6 +32,18 @@ enum ArgonLockReconciler {
   /// Make the phone match `lock`. Safe to call on every refresh: it compares
   /// before it acts, so a wake with nothing to do costs a fetch and no writes.
   static func reconcile(_ lock: ArgonLock?, context: ModelContext) {
+    // Arm the whole window with the system first, so the start and the end
+    // happen on time even if this app never runs again between now and then.
+    // Reconciling the Foqos session below is what makes the *current* state
+    // right; the schedule is what makes the boundaries right.
+    if let lock, lock.secondsLeft > 0,
+       let start = lock.startsAt, let end = lock.endsAt {
+      ArgonLockWindow.arm(from: start, until: end,
+                          selection: lockSelection(in: context))
+    } else {
+      ArgonLockWindow.disarm()
+    }
+
     let wanted = (lock?.isLive ?? false)
     // loadActiveSession, not the published property: on a background wake the
     // published value has not necessarily been populated, and reconciling
@@ -61,6 +74,14 @@ enum ArgonLockReconciler {
 
   /// Marks the session as one Argon started, so releasing it later is allowed.
   private static let ownedKey = "argon.lockOwnedProfileID"
+
+  /// What a lock shields: everything the lockdown profile blocks.
+  ///
+  /// Not the weekend list — that is the set he rations, and a lock-in is meant
+  /// to be the whole thing.
+  private static func lockSelection(in context: ModelContext) -> FamilyActivitySelection {
+    profile(in: context)?.selectedActivity ?? FamilyActivitySelection()
+  }
 
   /// The profile named in Settings, or the most recent one.
   ///

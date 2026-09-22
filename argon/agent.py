@@ -213,12 +213,30 @@ class Agent:
         if self.urgent_now():
             return None
 
+        # Only messages he did not ask for count against the budget. Counting
+        # every message_out meant a conversation spent it: on 21 Sep an
+        # evening of back-and-forth reached "8 messages already today" and
+        # every proactive message for the rest of the night was refused —
+        # including, at the moment it mattered, the ones about the lock he had
+        # just set up. Talking to Argon must not buy silence from it.
         today = clock.day_key()
-        sent_today = sum(1 for e in self.t.window(2)
-                         if e.day == today and e.kind == "message_out")
-        if sent_today >= DAILY_UNPROMPTED_CAP:
-            return (f"Error: {sent_today} messages already today, which is the "
-                    f"cap. Nothing further unprompted until tomorrow or until "
+        unprompted = 0
+        # False, not True: a day that opens with Argon speaking opens with an
+        # unprompted message. Seeding this True let the first one of the day
+        # through uncounted every day.
+        answered = False
+        for e in self.t.window(2):
+            if e.day != today:
+                continue
+            if e.kind == "message_in":
+                answered = True
+            elif e.kind == "message_out":
+                if not answered:
+                    unprompted += 1
+                answered = False
+        if unprompted >= DAILY_UNPROMPTED_CAP:
+            return (f"Error: {unprompted} unprompted messages already today, "
+                    f"which is the cap. Nothing further until tomorrow or until "
                     f"he speaks. Do not call say again.")
 
         unanswered, last_out = 0, None
@@ -486,15 +504,29 @@ def _selftest() -> None:
     # The cap bounds volume, which the backoff does not: spacing alone lets a
     # long evening carry any number of them.
     a2.urgent_now = lambda: None
-    while True:
-        t2.append("message_in", text="go on")       # reopen, so only the cap bites
-        a2._spoke_this_turn = False
-        r = a2.say("another")
-        if r != "sent":
-            break
-    assert "cap" in r, r
-    sent = sum(1 for e in t2.window(2) if e.kind == "message_out")
-    assert sent == DAILY_UNPROMPTED_CAP, sent
+    # Unprompted sends only: no message_in between them, or they are replies
+    # and replies are not rationed. Bounded so a counting bug cannot hang here.
+    t3 = Transcript(Path(tmp) / "cap.db")
+    a4 = Agent(cfg, t3, store, Tools(t3), "SYS")
+    a4.deliver = lambda text: []
+    a4._background, a4._went_quiet, a4._spoke_this_turn = True, False, False
+    for _ in range(DAILY_UNPROMPTED_CAP):
+        t3.append("message_out", text="unprompted")
+    assert "cap" in a4.say("one more"), "the cap bounds volume, not just spacing"
+
+    # A reply does not spend the budget: an evening of conversation used to
+    # exhaust it and silence every proactive message for the rest of the night.
+    t4 = Transcript(Path(tmp) / "replies.db")
+    a5 = Agent(cfg, t4, store, Tools(t4), "SYS")
+    a5.deliver = lambda text: []
+    a5._background, a5._went_quiet, a5._spoke_this_turn = True, False, False
+    for _ in range(DAILY_UNPROMPTED_CAP * 3):
+        t4.append("message_in", text="and?")
+        t4.append("message_out", text="answer")
+    a5._spoke_this_turn = False
+    a5.urgent_now = lambda: "event starting"   # past the spacing rule only
+    assert a5.say("your 19:00 starts in 12 minutes") == "sent", \
+        "conversation must not buy silence"
 
     # A deadline still gets through the cap — a missed event is not what the
     # cap protects him from.
