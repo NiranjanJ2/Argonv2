@@ -437,8 +437,14 @@ def outstanding_assignments(account: str, days_back: int = DAYS_BACK,
                 continue
             if not (floor <= due <= ceiling):
                 continue
+            # The clock travels with the date. A deadline at 08:30 is the
+            # previous evening's work and a bare date is not, and a board that
+            # shows only "09-22" cannot tell him which he is looking at.
+            at = classroom_due(cw)
             out.append({"id": cw["id"], "title": cw.get("title") or "(untitled)",
-                        "course": tidy_course(name), "due": due, "courseId": cid})
+                        "course": tidy_course(name), "due": due, "courseId": cid,
+                        "due_at": at.isoformat() if at else "",
+                        "due_precision": due_precision(cw)})
     out.sort(key=lambda a: a["due"])
     return out, refused
 
@@ -726,38 +732,24 @@ def classroom_due(coursework: dict[str, Any]) -> datetime | None:
         return None
 
 
-#: A deadline at or before this hour is collected in the morning, which means
-#: the work happens the night before. 12:00 rather than, say, 09:00 because a
-#: "due by lunchtime" item is still last night's job.
-WORK_NIGHT_CUTOFF_HOUR = 12
+def due_precision(coursework: dict[str, Any]) -> str:
+    """"instant" when the teacher set a time, "work_by_day" when only a date.
 
-
-def work_night(due: datetime | None) -> str:
-    """The day he has to *do* it, which is not always the day it is collected.
-
-    Two shapes come out of his Classroom. A 23:59 deadline is already the night
-    he works: 漢字フラッシュカード due Mon 23:59 is Monday's job. But a deadline at
-    08:30 is the start of the school day — nothing is getting done that morning,
-    so it belongs to the night before.
-
-    His teachers say so themselves: AP Lang titles the assignment "9/21 MCQ
-    Monday Test Corrections" and sets the deadline to 09-22 08:30. The title is
-    the work night; the deadline is the collection.
-
-    Showing the collection date made every morning-deadline assignment look a
-    day later than it really was, across English and Math both.
+    v1 kept these apart and this rewrite collapsed both to a bare date, which
+    is what made morning deadlines look a day late: "9/21 MCQ Monday Test
+    Corrections" showed as due 09-22 with no hint that 09-22 means 08:30, so
+    it read as an evening's work on the Tuesday rather than something to finish
+    on the Monday night. The date was right; the missing half was the clock.
     """
-    if due is None:
+    if not coursework.get("dueDate"):
         return ""
-    if due.hour < WORK_NIGHT_CUTOFF_HOUR:
-        return (due - timedelta(days=1)).strftime("%Y-%m-%d")
-    return due.strftime("%Y-%m-%d")
+    return "instant" if coursework.get("dueTime") is not None else "work_by_day"
 
 
 def _due_key(work: dict[str, Any]) -> tuple:
-    """Sort by the night he has to do it, undated last."""
-    night = work_night(classroom_due(work))
-    return (1, "") if not night else (0, night)
+    """Sort by local due date, undated last — the order he reads them in."""
+    due = classroom_due(work)
+    return (1, "") if due is None else (0, due.strftime("%Y-%m-%d"))
 
 
 def search_all_mail(accounts: list[str], query: str, limit: int = 5) -> str:
@@ -827,19 +819,13 @@ def _selftest() -> None:
         assert classroom_due(undated).strftime("%Y-%m-%d %H:%M") == "2026-09-20 23:59"
         assert classroom_due({}) is None
 
-        # The board shows the night he works, not the morning it is collected.
-        # AP Lang titles this one "9/21" and sets the deadline to 09-22 08:30.
-        assert work_night(classroom_due(
-            {"dueDate": {"year": 2026, "month": 9, "day": 22},
-             "dueTime": {"hours": 15, "minutes": 30}})) == "2026-09-21"
-        # A 23:59 deadline is already the right night; it must not shift again.
-        assert work_night(classroom_due(
-            {"dueDate": {"year": 2026, "month": 9, "day": 22},
-             "dueTime": {"hours": 6, "minutes": 59}})) == "2026-09-21"
-        # A bare date is end of day, so it stays put.
-        assert work_night(classroom_due(
-            {"dueDate": {"year": 2026, "month": 9, "day": 20}})) == "2026-09-20"
-        assert work_night(None) == ""
+        # v1's distinction, which this rewrite had flattened: a deadline with a
+        # time is an instant, one without is a day to work by.
+        assert due_precision({"dueDate": {"year": 2026, "month": 9, "day": 22},
+                              "dueTime": {"hours": 15, "minutes": 30}}) == "instant"
+        assert due_precision({"dueDate": {"year": 2026, "month": 9, "day": 20}}) \
+            == "work_by_day"
+        assert due_precision({}) == ""
 
         # Scraped homework that the course also assigns properly is dropped.
         # AP Lang put "9/21 MCQ Test Corrections" in its weekly post and

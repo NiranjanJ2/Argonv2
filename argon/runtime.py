@@ -528,7 +528,8 @@ class Runtime:
                 added += 1
             self.store.add_task(item["title"], subject=item["course"],
                                 due=item["due"] or "", source="classroom",
-                                external_id=item["id"])
+                                external_id=item["id"],
+                                due_at=item.get("due_at", ""))
 
         # Anything he no longer owes is done, however he did it — but only
         # when every course answered.

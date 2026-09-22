@@ -75,6 +75,7 @@ class Task:
     source: str
     external_id: str | None = None
     started_at: str | None = None
+    due_at: str | None = None
 
     @property
     def started(self) -> bool:
@@ -115,7 +116,7 @@ class Task:
         if self.subject:
             bits.append(f"({self.subject})")
         if self.due:
-            bits.append(f"due {_due_phrase(self.due)}")
+            bits.append(f"due {_due_phrase(self.due)}{_at_phrase(self.due_at)}")
         if self.priority != "normal":
             bits.append(f"[{self.priority}]")
         return " ".join(bits)
@@ -149,6 +150,10 @@ class Store:
         # must never undo his, and without recording the difference the two are
         # indistinguishable the moment the row is written.
         ("tasks", "done_by", "TEXT"),
+        # The exact deadline when the teacher set a time. v1 kept this apart
+        # from a bare due date ("instant" vs "work_by_day"); flattening both to
+        # a date is what made an 08:30 deadline read as a whole day later.
+        ("tasks", "due_at", "TEXT"),
     )
 
     def _migrate(self) -> None:
@@ -163,7 +168,7 @@ class Store:
     # -- tasks ------------------------------------------------------------
     def add_task(self, title: str, *, subject: str = "", due: str = "",
                  priority: str = "normal", source: str = "him",
-                 external_id: str = "") -> Task:
+                 external_id: str = "", due_at: str = "") -> Task:
         """Add a task. An *external_id* makes it idempotent, so importing the
         same Classroom assignment twice updates it rather than duplicating."""
         if external_id:
@@ -188,15 +193,16 @@ class Store:
                 # not outrank it. What was missing is being *told*; see
                 # update_task in the runtime.
                 return self.update_task(existing.id, due=due or None,
-                                        title=title, subject=subject or None) \
+                                        title=title, subject=subject or None,
+                                        due_at=due_at or None) \
                     or self.task(existing.id) or existing
         tid = uuid.uuid4().hex[:12]
         with self._lock:
             self._db.execute(
                 "INSERT INTO tasks (id,title,subject,due,priority,source,"
-                "external_id,created_at) VALUES (?,?,?,?,?,?,?,?)",
+                "external_id,created_at,due_at) VALUES (?,?,?,?,?,?,?,?,?)",
                 (tid, title, subject or None, due or None, priority, source,
-                 external_id or None, clock.now().isoformat()),
+                 external_id or None, clock.now().isoformat(), due_at or None),
             )
             self._db.commit()
         self._t.append("task_added", id=tid, summary=f"{title}"
@@ -322,7 +328,8 @@ class Store:
         if current is None:
             return None
         allowed = {k: v for k, v in changes.items()
-                   if k in {"title", "subject", "due", "priority"} and v is not None
+                   if k in {"title", "subject", "due", "priority", "due_at"}
+                   and v is not None
                    and getattr(current, k) != v}
         if not allowed:
             return current
@@ -618,11 +625,28 @@ def _due_phrase(due: str) -> str:
     return f"{day:%a} {day:%m-%d} ({when})"
 
 
+def _at_phrase(due_at: str | None) -> str:
+    """" 08:30" when the teacher set a time, empty when the date is all there is.
+
+    A morning deadline is the previous evening's work and a bare date is not.
+    Without the clock the board cannot tell him which one he is looking at,
+    which is the whole reason 09-22 read as a day later than it was.
+    """
+    if not due_at:
+        return ""
+    try:
+        at = datetime.fromisoformat(due_at)
+    except (TypeError, ValueError):
+        return ""
+    return "" if (at.hour, at.minute) == (23, 59) else f" {at:%H:%M}"
+
+
 def _task(row: sqlite3.Row) -> Task:
     return Task(id=row["id"], title=row["title"], subject=row["subject"],
                 due=row["due"], priority=row["priority"], done=bool(row["done"]),
                 source=row["source"], external_id=row["external_id"],
-                started_at=row["started_at"])
+                started_at=row["started_at"],
+                due_at=(row["due_at"] if "due_at" in row.keys() else None))
 
 
 def _selftest() -> None:
@@ -696,6 +720,18 @@ def _selftest() -> None:
         s.add_task("HW 18", source="classroom", external_id="cw-18",
                    due="2026-09-30")
         assert s.task(moved.id).due == "2026-09-30", "the import restores the real date"
+
+        # A morning deadline shows its clock; a bare date does not. Without
+        # this "due Tue 09-22" hid that 09-22 meant 08:30, so work due first
+        # thing in the morning read as a whole day later than it was.
+        timed = s.add_task("MCQ Corrections", source="classroom",
+                           external_id="cw-mcq", due="2026-09-22",
+                           due_at="2026-09-22T08:30:00-07:00")
+        assert "08:30" in s.task(timed.id).line(), s.task(timed.id).line()
+        plain = s.add_task("Read ch 4", source="classroom", external_id="cw-r4",
+                           due="2026-09-22",
+                           due_at="2026-09-22T23:59:00-07:00")
+        assert "23:59" not in s.task(plain.id).line(), "end of day is not news"
         assert "task_reopened" in [e.kind for e in t.window(2)]
 
         assert s.complete_task(a.id).done is True
