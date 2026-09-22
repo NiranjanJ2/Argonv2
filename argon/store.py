@@ -485,8 +485,23 @@ class Store:
                        summary=f"{when} until {until:%H:%M} — {reason}".strip()[:200])
 
     def _next_lock_version(self) -> int:
-        rec = self.lock_record()
-        return int((rec or {}).get("version", 0)) + 1
+        """Monotonic for the life of the store, never derived from the lock.
+
+        Taking it from the current lock meant clearing one reset the counter,
+        so the next lock was version 1 again — and a stale applied report from
+        the *previous* version 1 matched it. Starting a task was then told the
+        phone had refused the lock, quoting an override that had already
+        expired. A version that can repeat is not a version.
+        """
+        with self._lock:
+            row = self._db.execute(
+                "SELECT value FROM settings WHERE key='lock_seq'").fetchone()
+            nxt = int(row["value"]) + 1 if row else 1
+            self._db.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES "
+                "('lock_seq', ?)", (str(nxt),))
+            self._db.commit()
+        return nxt
 
     def lock_record(self) -> dict | None:
         """The stored lock, live or not, or None if there is none."""

@@ -1341,6 +1341,18 @@ def _selftest() -> None:
         mine.end_task(c.id, done=True)
         assert mine.store.lock() is not None, "his own lock-in survives"
 
+        # A version never repeats, so a stale report cannot be read as a
+        # report about the next lock. Clearing used to reset the counter.
+        seqs = Runtime(config.Config())
+        seqs.store.clear_lock()
+        seqs.store.set_lock(clock.now() + timedelta(hours=1), "one")
+        first = seqs.store.lock_record()["version"]
+        seqs.store.clear_lock()
+        seqs.store.set_lock(clock.now() + timedelta(hours=1), "two")
+        assert seqs.store.lock_record()["version"] > first, \
+            "a cleared lock must not hand its version to the next one"
+        seqs.store.clear_lock()
+
         # Argon may not claim a lock the phone has not confirmed. v1 kept
         # desired and applied apart and compared versions for exactly this.
         truth = Runtime(config.Config())
