@@ -150,7 +150,10 @@ enum ArgonLockReconciler {
   /// Falling back rather than doing nothing: a name that no longer matches a
   /// profile — renamed, deleted — would otherwise make every lock silently do
   /// nothing, and a lock that quietly does nothing is worse than no feature.
-  private static func profile(in context: ModelContext) -> BlockedProfiles? {
+  ///
+  /// Also the profile the evening routine blocks with (ArgonAppDelegate), so
+  /// a lock and the routine can never disagree about which apps go dark.
+  static func profile(in context: ModelContext) -> BlockedProfiles? {
     let wanted = ArgonBridge.shared.profileName
     let all = (try? BlockedProfiles.fetchProfiles(in: context)) ?? []
     return all.first { $0.name == wanted }

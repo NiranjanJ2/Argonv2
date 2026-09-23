@@ -57,10 +57,16 @@ final class ArgonStore {
   private var cachedAt: Date?
   private var highestSeq: Int? { messages.filter { !$0.pending }.map(\.seq).max() }
 
-  init(client: ArgonClient, outbox: ArgonOutbox = ArgonOutbox(), cache: ArgonCache = ArgonCache()) {
+  /// Where the phone remembers submitting today's sheet. Injected so tests
+  /// do not share the app's defaults.
+  private let defaults: UserDefaults
+
+  init(client: ArgonClient, outbox: ArgonOutbox = ArgonOutbox(), cache: ArgonCache = ArgonCache(),
+       defaults: UserDefaults = .standard) {
     self.client = client
     self.outbox = outbox
     self.cache = cache
+    self.defaults = defaults
     if let snapshot = cache.load() {
       state = snapshot.state
       messages = snapshot.messages
@@ -238,6 +244,38 @@ final class ArgonStore {
     Task { try? await client.ackBrief() }
   }
 
+  // MARK: the afternoon sheet
+
+  private static let submittedKey = "argon.planner.submittedFor"
+
+  /// The sheet, when there is one to show: after 15:36, not yet planned today,
+  /// and something to decide. Nil otherwise, and nil on any failure — the
+  /// sheet is a bonus on top of the board, and a failure fetching it must not
+  /// replace a more useful error already on screen.
+  ///
+  /// The phone's own record of submitting is checked as well as the server's
+  /// flag. A plan still sitting in the outbox — offline, or the server down —
+  /// leaves the server saying "due", and reopening the sheet he just filled
+  /// in would be the nag it exists to replace.
+  func plannerIfDue() async -> ArgonPlannerPayload? {
+    guard state.planner?.due == true,
+          defaults.string(forKey: Self.submittedKey) != ArgonDate.today()
+    else { return nil }
+    guard let payload = try? await client.planner() else { return nil }
+    return payload.needed && payload.hasAnythingToDecide ? payload : nil
+  }
+
+  /// Apply the sheet. Sent even when nothing was chosen: "I looked and
+  /// nothing needs moving" is an answer, and without it the sheet reopens.
+  func submitPlan(_ plan: ArgonPlanSubmission) async {
+    defaults.set(ArgonDate.today(), forKey: Self.submittedKey)
+    ArgonLog.note("planner", "submitted — \(plan.done.count) done, "
+                  + "\(plan.ignore.count) not doing, \(plan.add.count) added, "
+                  + "start \(plan.startAt ?? "default")")
+    apply(.plan(plan))
+    await enqueue(.plan(plan))
+  }
+
   func markRead() async {
     guard state.unread > 0 else { return }
     state.unread = 0
@@ -260,6 +298,17 @@ final class ArgonStore {
     case .move(let id, let due):
       guard let i = state.tasks.firstIndex(where: { $0.id == id }) else { return }
       state.tasks[i].due = due
+    case .plan(let plan):
+      for id in plan.done + plan.ignore {
+        guard let i = state.tasks.firstIndex(where: { $0.id == id }) else { continue }
+        state.tasks[i].done = true
+      }
+      for id in plan.today {
+        guard let i = state.tasks.firstIndex(where: { $0.id == id }) else { continue }
+        state.tasks[i].due = ArgonDate.today()
+      }
+      state.planner?.due = false
+      state.planner?.focus = plan.focus
     case .add, .say, .markRead:
       break   // handled by the caller, which has the richer value
     }
@@ -286,6 +335,10 @@ final class ArgonStore {
       connection = .live(at: Date())
       lastRefresh = Date()
       persist(stateJSON: stateJSON)
+      // Fresh state is fresh state. Without this a submitted plan's new start
+      // time reached the screen but not the routine scheduler, which only
+      // hears this notification, until some later refresh happened along.
+      NotificationCenter.default.post(name: .argonStateApplied, object: nil)
     } catch {
       // Queue is empty, so the write landed; only the read-back failed. The
       // optimistic state is still correct enough to show.

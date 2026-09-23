@@ -135,6 +135,13 @@ actor ArgonClient {
                       from: await request("v2/messages", query: query))
   }
 
+  /// The afternoon sheet. Separate from `state()` because building it reads
+  /// Classroom for AP Lang's post, which is seconds rather than milliseconds;
+  /// `state.planner.due` says when it is worth asking.
+  func planner() async throws -> ArgonPlannerPayload {
+    try decode(ArgonPlannerPayload.self, from: await request("v1/planner", timeout: 30))
+  }
+
   // MARK: writes — one per PendingWrite.Kind, all returning or throwing
 
   func apply(_ write: PendingWrite) async throws {
@@ -162,6 +169,10 @@ actor ArgonClient {
                             idempotencyKey: key, timeout: 20)
     case .markRead:
       _ = try await request("v1/ios/read", method: "POST", body: [:])
+    case .plan(let plan):
+      // Keyed, because a retry must not add AP Chem twice.
+      _ = try await request("v1/planner", method: "POST", body: plan.body,
+                            idempotencyKey: key)
     }
   }
 

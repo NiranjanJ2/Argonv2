@@ -203,6 +203,102 @@ struct ArgonBrief: Codable, Equatable {
   var acked: Bool
 }
 
+/// Whether the afternoon sheet has anything to ask today, and what he picked.
+///
+/// The cheap half of the planner, sent on every state read. The sheet itself
+/// needs a Classroom read, so it is fetched only when `due` says so.
+struct ArgonPlannerStatus: Codable, Equatable {
+  var due: Bool
+  var opensAfter: String
+  var plannedFor: String?
+  /// Task ids he chose for tonight without moving their dates — Classroom
+  /// owns those, and a moved date is put back by the next sync.
+  var focus: [String]
+
+  enum CodingKeys: String, CodingKey {
+    case due, focus
+    case opensAfter = "opens_after"
+    case plannedFor = "planned_for"
+  }
+
+  init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    due = try c.decodeIfPresent(Bool.self, forKey: .due) ?? false
+    opensAfter = try c.decodeIfPresent(String.self, forKey: .opensAfter) ?? "15:36"
+    plannedFor = try c.decodeIfPresent(String.self, forKey: .plannedFor)
+    focus = try c.decodeIfPresent([String].self, forKey: .focus) ?? []
+  }
+}
+
+/// Tonight's shape, as the server describes it.
+///
+/// The server does not decide *when*. It reports the time he chose in the
+/// afternoon sheet — or the default he gets by not filling it in — and the
+/// phone arms a `DeviceActivitySchedule` from it (`ArgonRoutineScheduler`),
+/// so the block fires with the app closed and the server down.
+struct ArgonRoutine: Codable, Equatable {
+  /// "HH:MM". His answer if he gave one, otherwise `defaultStart`.
+  var startAt: String
+  /// Did he actually fill in the sheet today?
+  var chosen: Bool
+  var defaultStart: String
+  var plannedToday: Bool
+  /// Weekday numbers, Python-style: Monday 0 … Sunday 6. Sun–Thu by default.
+  var schoolNights: [Int]
+  var windowMinutes: Int
+  var warningMinutes: Int
+
+  enum CodingKeys: String, CodingKey {
+    case startAt = "start_at"
+    case chosen
+    case defaultStart = "default_start"
+    case plannedToday = "planned_today"
+    case schoolNights = "school_nights"
+    case windowMinutes = "window_minutes"
+    case warningMinutes = "warning_minutes"
+  }
+
+  init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    defaultStart = try c.decodeIfPresent(String.self, forKey: .defaultStart) ?? "18:00"
+    startAt = try c.decodeIfPresent(String.self, forKey: .startAt) ?? defaultStart
+    chosen = try c.decodeIfPresent(Bool.self, forKey: .chosen) ?? false
+    plannedToday = try c.decodeIfPresent(Bool.self, forKey: .plannedToday) ?? false
+    schoolNights = try c.decodeIfPresent([Int].self, forKey: .schoolNights) ?? [6, 0, 1, 2, 3]
+    windowMinutes = try c.decodeIfPresent(Int.self, forKey: .windowMinutes) ?? 90
+    warningMinutes = try c.decodeIfPresent(Int.self, forKey: .warningMinutes) ?? 30
+  }
+
+  /// Minutes after midnight, or nil when the server sent something that is
+  /// not HH:MM — arming a block at a guessed hour is worse than not arming.
+  static func minutes(_ hhmm: String) -> Int? {
+    let parts = hhmm.split(separator: ":")
+    guard parts.count == 2, let hour = Int(parts[0]), let minute = Int(parts[1]),
+          (0..<24).contains(hour), (0..<60).contains(minute)
+    else { return nil }
+    return hour * 60 + minute
+  }
+
+  var startMinutes: Int? { Self.minutes(startAt) }
+
+  /// The block's end, wrapped past midnight.
+  var endMinutes: Int? { startMinutes.map { ($0 + windowMinutes) % (24 * 60) } }
+
+  /// When the heads-up lands, and whether that is the evening before (a
+  /// start at 00:10 warns at 23:40 the previous day).
+  var warning: (minutes: Int, dayBefore: Bool)? {
+    guard let start = startMinutes else { return nil }
+    let at = start - warningMinutes
+    return at >= 0 ? (at, false) : (at + 24 * 60, true)
+  }
+
+  /// What was last armed, so an unchanged routine is a no-op. Re-arming is
+  /// not free: `startMonitoring` tears the activity down and rebuilds it.
+  func fingerprint(profile: String) -> String {
+    "\(profile)|\(startAt)|\(windowMinutes)|\(warningMinutes)|\(schoolNights)"
+  }
+}
+
 struct ArgonState: Codable, Equatable {
   var now: String?
   var school: ArgonSchool
@@ -213,9 +309,11 @@ struct ArgonState: Codable, Equatable {
   var budget: ArgonBudget?
   var lock: ArgonLock?
   var brief: ArgonBrief?
+  var planner: ArgonPlannerStatus?
+  var routine: ArgonRoutine?
 
   enum CodingKeys: String, CodingKey {
-    case now, school, ticking, tasks, facts, unread, budget, lock, brief
+    case now, school, ticking, tasks, facts, unread, budget, lock, brief, planner, routine
   }
 
   init(from decoder: Decoder) throws {
@@ -229,6 +327,10 @@ struct ArgonState: Codable, Equatable {
     budget = try c.decodeIfPresent(ArgonBudget.self, forKey: .budget)
     lock = try c.decodeIfPresent(ArgonLock.self, forKey: .lock)
     brief = try c.decodeIfPresent(ArgonBrief.self, forKey: .brief)
+    // try? rather than decodeIfPresent: a malformed planner block is a missing
+    // sheet, not a blank board.
+    planner = try? c.decodeIfPresent(ArgonPlannerStatus.self, forKey: .planner)
+    routine = try? c.decodeIfPresent(ArgonRoutine.self, forKey: .routine)
   }
 
   static let empty = try! JSONDecoder().decode(ArgonState.self,
@@ -261,12 +363,24 @@ struct ArgonState: Codable, Equatable {
   /// Late work, most recent first: the newest miss is the one he might still
   /// rescue, and the August ones are archaeology.
   var overdue: [ArgonTask] {
-    sortedTasks.filter { $0.isOverdue }.sorted { ($0.due ?? "") > ($1.due ?? "") }
+    sortedTasks.filter { $0.isOverdue && !isFocus($0) }
+      .sorted { ($0.due ?? "") > ($1.due ?? "") }
   }
 
   /// What he can still act on today, and what is real but not yet his problem.
-  var tonight: [ArgonTask] { upcoming.filter { $0.isTonight } }
-  var future: [ArgonTask] { upcoming.filter { !$0.isTonight } }
+  ///
+  /// Tonight also holds what he picked in the afternoon sheet. Those keep
+  /// their real dates — a Classroom date moved to today is put back by the
+  /// next sync — so without this a pick would stay filed under next week or
+  /// the late pile, and the sheet's answer would vanish from the screen.
+  var tonight: [ArgonTask] {
+    sortedTasks.filter { ($0.isTonight && !$0.isOverdue) || isFocus($0) }
+  }
+  var future: [ArgonTask] { upcoming.filter { !$0.isTonight && !isFocus($0) } }
+
+  private func isFocus(_ task: ArgonTask) -> Bool {
+    planner?.focus.contains(task.id) ?? false
+  }
 }
 
 struct ArgonMessagesResponse: Codable {

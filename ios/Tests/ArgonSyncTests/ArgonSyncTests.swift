@@ -360,3 +360,126 @@ final class StoreTests: XCTestCase {
     XCTAssertFalse(store.state.ticking)
   }
 }
+
+// MARK: - the afternoon planner
+
+private let plannerJSON = """
+{"needed":true,"today_key":"2026-09-14","default_start":"18:00","warning_minutes":30,
+ "overdue":[{"id":"mine","title":"SAT reading","subject":"","due":"2026-09-10",
+             "days_overdue":4,"classroom":false},
+            {"id":"cw","title":"HW 3","subject":"Math","due":"2026-09-12",
+             "days_overdue":2,"classroom":true},
+            {"id":"cw2","title":"Worksheet","subject":"Japanese","due":"2026-09-11",
+             "classroom":true}],
+ "today":[],
+ "long_term":[{"id":"essay","title":"Essay draft","due":"2026-09-18","classroom":true}],
+ "suggestions":[{"kind":"chem","title":"AP Chem homework","subject":"AP Chemistry",
+                 "prompt":"Did AP Chem assign homework today?","default":true},
+                {"kind":"lang","title":"Read p. 4-7","subject":"AP English Lang",
+                 "default":true}]}
+"""
+
+@MainActor
+final class PlannerTests: XCTestCase {
+  override func setUp() { StubProtocol.reset() }
+
+  private func payload() -> ArgonPlannerPayload {
+    try! JSONDecoder().decode(ArgonPlannerPayload.self, from: Data(plannerJSON.utf8))
+  }
+
+  func testChemIsNeverPreTickedWhateverTheServerSays() {
+    let chem = payload().suggestions.first { $0.kind == "chem" }!
+    XCTAssertFalse(chem.isDefault, "on invents work; off would be the server's claim")
+    XCTAssertTrue(payload().suggestions.first { $0.kind == "lang" }!.isDefault)
+  }
+
+  func testClassroomWorkCannotBeMovedAndOwnWorkCannotBeIgnored() {
+    let items = Dictionary(uniqueKeysWithValues: payload().overdue.map { ($0.id, $0) })
+    XCTAssertEqual(items["cw"]!.answers, [.stillToDo, .done, .notDoing])
+    XCTAssertEqual(items["mine"]!.answers, [.doToday, .done, .skip])
+  }
+
+  func testEveryLateItemNeedsAnAnswer() {
+    let p = payload()
+    XCTAssertFalse(p.allAnswered(["mine": .done, "cw": .done]))
+    XCTAssertTrue(p.allAnswered(["mine": .skip, "cw": .done, "cw2": .notDoing]))
+  }
+
+  func testTapsBecomeTheServersVocabulary() {
+    let p = payload()
+    let plan = ArgonPlanSubmission.from(
+      payload: p, longTermPicked: ["essay"],
+      answers: ["mine": .doToday, "cw": .stillToDo, "cw2": .notDoing],
+      accepted: ["chem:AP Chem homework", "lang:Read p. 4-7"],
+      extras: ["  Email counsellor ", " "], startAt: "19:30")
+    XCTAssertEqual(plan.today, ["mine"])
+    XCTAssertEqual(plan.ignore, ["cw2"])
+    // Classroom "still to do" joins focus: its date is the teacher's.
+    XCTAssertEqual(plan.focus, ["essay", "cw"])
+    XCTAssertTrue(plan.chem)
+    XCTAssertEqual(plan.add.map(\.title), ["Read p. 4-7", "Email counsellor"])
+    XCTAssertEqual(plan.body["start_at"] as? String, "19:30")
+    XCTAssertTrue(ArgonPlanSubmission().body["start_at"] is NSNull,
+                  "an unset start is sent as null, so the default comes back")
+  }
+
+  func testRoutineDecodesAndKnowsItsTimes() throws {
+    let state = try JSONDecoder().decode(ArgonState.self, from: Data("""
+    {"tasks":[{"id":"essay","title":"Essay","due":"2099-01-01"},
+              {"id":"late","title":"Late","due":"2000-01-01"}],
+     "planner":{"due":true,"focus":["essay","late"]},
+     "routine":{"start_at":"00:10","chosen":true,"window_minutes":90,
+                "warning_minutes":30,"school_nights":[6,0,1,2,3]}}
+    """.utf8))
+    XCTAssertEqual(state.planner?.due, true)
+    let routine = try XCTUnwrap(state.routine)
+    XCTAssertEqual(routine.startMinutes, 10)
+    XCTAssertEqual(routine.endMinutes, 100)
+    XCTAssertEqual(routine.warning?.minutes, 23 * 60 + 40)
+    XCTAssertEqual(routine.warning?.dayBefore, true)
+    XCTAssertNil(ArgonRoutine.minutes("25:00"))
+    // Picks are tonight's, whatever their dates say — and not also late.
+    XCTAssertEqual(Set(state.tonight.map(\.id)), ["essay", "late"])
+    XCTAssertTrue(state.overdue.isEmpty && state.future.isEmpty)
+  }
+
+  func testSubmittingPostsOnceAndDoesNotReopen() async {
+    let suite = "argon-test-planner-\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let due = #"{"tasks":[{"id":"cw","title":"HW 3","due":"2000-01-01"}],"planner":{"due":true}}"#
+    var posts: [[String: Any]] = []
+    var keys: [String] = []
+    StubProtocol.handler = { request in
+      let path = request.url!.path
+      if path.hasSuffix("v1/planner") && request.httpMethod == "POST" {
+        let data = request.httpBodyStream.map(readAll) ?? Data()
+        posts.append((try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:])
+        keys.append(request.value(forHTTPHeaderField: "Idempotency-Key") ?? "")
+        return (200, Data("{}".utf8))
+      }
+      if path.hasSuffix("v1/planner") { return (200, Data(plannerJSON.utf8)) }
+      if path.contains("state") { return (200, Data(due.utf8)) }
+      return (200, Data(#"{"messages":[],"unread":0}"#.utf8))
+    }
+    let client = ArgonClient(base: URL(string: "http://stub")!, token: "t",
+                             session: StubProtocol.session)
+    let store = ArgonStore(client: client,
+                           outbox: ArgonOutbox(filename: tempName("plan-out")),
+                           cache: ArgonCache(filename: tempName("plan-cache")),
+                           defaults: defaults)
+    await store.refresh()
+    let sheet = await store.plannerIfDue()
+    XCTAssertNotNil(sheet)
+
+    await store.submitPlan(ArgonPlanSubmission(done: ["cw"], startAt: nil))
+    XCTAssertEqual(posts.count, 1)
+    XCTAssertEqual(posts.first?["done"] as? [String], ["cw"])
+    XCTAssertFalse(keys.first?.isEmpty ?? true, "keyed, so a retry cannot add twice")
+    // The stub still says due — as a server would with the plan stuck in the
+    // outbox. The phone's own record keeps the sheet shut.
+    await store.refresh()
+    let again = await store.plannerIfDue()
+    XCTAssertNil(again, "a submitted sheet must not reopen the same day")
+  }
+}

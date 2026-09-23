@@ -19,6 +19,11 @@ struct PendingWrite: Codable, Identifiable, Equatable {
     case add(title: String, due: String?)
     case say(text: String)
     case markRead
+    /// The afternoon sheet, all of it in one write. One write rather than a
+    /// complete per item so the day is marked planned in the same request
+    /// that applies it — half a plan landing is how the sheet reopens with
+    /// some of its answers already taken.
+    case plan(ArgonPlanSubmission)
   }
 
   let id: UUID
@@ -46,6 +51,7 @@ struct PendingWrite: Codable, Identifiable, Equatable {
     case .add(let title, _): return "adding “\(title)”"
     case .say(let text): return "sending “\(text.prefix(30))”"
     case .markRead: return "marking messages read"
+    case .plan: return "saving this afternoon's plan"
     }
   }
 }
