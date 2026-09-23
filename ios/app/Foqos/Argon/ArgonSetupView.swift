@@ -26,70 +26,69 @@ struct ArgonSetupView: View {
   @AppStorage("argon.setupComplete") private var setupComplete = false
 
   var body: some View {
-    NavigationStack {
-      ScrollView {
-        VStack(spacing: 16) {
-          header
-          appsCard
-          weekendCard
-          if let error {
-            Text(error).font(Argon.detail).foregroundStyle(Argon.overdue)
-              .fixedSize(horizontal: false, vertical: true)
-          }
-          saveButton
+    ScrollView {
+      VStack(alignment: .leading, spacing: 8) {
+        header
+        DraftSectionLabel(title: "Apps to block")
+          .padding(.horizontal, Argon.overshoot)
+        appsCard
+        DraftSectionLabel(title: "Weekends")
+          .padding(.horizontal, Argon.overshoot).padding(.top, 10)
+        weekendCard
+        if let error {
+          Text(error).font(Argon.detail)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+            .draftAlarm()
+            .padding(Argon.overshoot)
         }
-        .padding(.horizontal, 16)
-        .padding(.bottom, 32)
+        saveButton
+          // The style pads 6 for its own overshoot; boxes pad `overshoot`.
+          .padding(.horizontal, Argon.overshoot - 6).padding(.top, 10)
       }
-      .scrollContentBackground(.hidden)
-      .argonAmbience()
-      .navigationTitle("Set up Argon")
-      .navigationBarTitleDisplayMode(.large)
-      .toolbarBackground(.hidden, for: .navigationBar)
+      // Box sides sit at `margin`; each box's overshoot lives in the gap.
+      .padding(.horizontal, Argon.margin - Argon.overshoot)
+      .padding(.bottom, 32)
     }
+    .scrollIndicators(.hidden)
+    .argonAmbience()
     .tint(Argon.accent)
+    .preferredColorScheme(.dark)
     .familyActivityPicker(isPresented: $picking, selection: $selection)
   }
 
   // MARK: - cards
 
   private var header: some View {
-    ArgonGlass {
+    VStack(alignment: .leading, spacing: 8) {
+      Text("Set up Argon")
+        .font(Argon.screenTitle)
+        .foregroundStyle(Argon.Tone.primary)
       Text("Argon blocks these when you ask it to, and when you've agreed to a "
            + "lock-in. Nothing is blocked until then.")
         .font(Argon.body)
         .foregroundStyle(Argon.Tone.secondary)
         .fixedSize(horizontal: false, vertical: true)
     }
+    .padding(.horizontal, Argon.overshoot)
+    .padding(.top, 32).padding(.bottom, 14)
   }
 
   private var appsCard: some View {
     ArgonGlass {
       VStack(alignment: .leading, spacing: 12) {
-        Text("APPS TO BLOCK")
-          .font(Argon.label.weight(.semibold)).tracking(1.2)
-          .foregroundStyle(Argon.accentSoft)
-
         Text(countLabel)
-          .font(Argon.body).foregroundStyle(Argon.Tone.primary)
+          .font(Argon.body)
+          .foregroundStyle(chosenAny ? Argon.Tone.primary : Argon.Tone.faint)
 
         Button {
           picking = true
         } label: {
-          HStack(spacing: 8) {
-            Image(systemName: "square.grid.2x2")
-            Text(chosenAny ? "Change selection" : "Choose apps")
-          }
-          .font(Argon.body.weight(.semibold))
-          .foregroundStyle(.white)
-          .frame(maxWidth: .infinity, minHeight: 44)
-          .background {
-            Capsule().fill(LinearGradient(
-              colors: [Argon.accent, Argon.accentDeep],
-              startPoint: .topLeading, endPoint: .bottomTrailing))
-          }
+          Label(chosenAny ? "Change selection" : "Choose apps",
+                systemImage: "square.grid.2x2")
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ArgonButtonStyle(prominent: false))
       }
     }
   }
@@ -114,11 +113,12 @@ struct ArgonSetupView: View {
             Text("Budget an hour").font(Argon.body)
               .foregroundStyle(Argon.Tone.primary)
             Spacer()
-            Picker("", selection: $weekendMinutes) {
+            Picker("Budget an hour", selection: $weekendMinutes) {
               ForEach([5, 10, 15, 20, 30, 45, 60], id: \.self) { Text("\($0)m").tag($0) }
             }
+            .labelsHidden()
             .pickerStyle(.menu)
-            .tint(Argon.accentSoft)
+            .tint(Argon.accent)
           }
         }
       }
@@ -130,22 +130,13 @@ struct ArgonSetupView: View {
       Task { await save() }
     } label: {
       HStack(spacing: 8) {
-        if saving { ProgressView().controlSize(.small).tint(.white) }
+        if saving { ProgressView().controlSize(.small).tint(Argon.accent) }
         Text(saving ? "Saving…" : "Done")
       }
-      .font(Argon.body.weight(.semibold))
-      .foregroundStyle(.white)
-      .frame(maxWidth: .infinity, minHeight: 50)
-      .background {
-        Capsule().fill(chosenAny
-          ? AnyShapeStyle(LinearGradient(colors: [Argon.accent, Argon.accentDeep],
-                                         startPoint: .topLeading,
-                                         endPoint: .bottomTrailing))
-          : AnyShapeStyle(Color.white.opacity(0.10)))
-      }
     }
-    .buttonStyle(.plain)
+    .buttonStyle(ArgonButtonStyle())
     .disabled(!chosenAny || saving)
+    .opacity(!chosenAny || saving ? 0.4 : 1)
   }
 
   // MARK: - state

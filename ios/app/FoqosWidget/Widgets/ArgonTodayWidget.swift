@@ -7,22 +7,12 @@ struct ArgonTodayWidget: Widget {
   var body: some WidgetConfiguration {
     StaticConfiguration(kind: "ArgonToday", provider: ArgonTodayProvider()) { entry in
       ArgonTodayWidgetView(snapshot: entry.snapshot)
-        // Glass rather than a painted panel. `.fill.tertiary` is the system's
-        // adaptive widget material: it picks up the wallpaper behind it and
-        // follows the home screen's own tinting, which a solid colour fights.
-        // The gradient over it is what keeps it Argon's blue instead of a
-        // generic grey pane — low enough opacity that the wallpaper still
-        // reads through.
-        .containerBackground(for: .widget) {
-          Rectangle()
-            .fill(.fill.tertiary)
-            .overlay {
-              LinearGradient(
-                colors: [ArgonWidgetPalette.accent.opacity(0.28),
-                         ArgonWidgetPalette.accent.opacity(0.06)],
-                startPoint: .topLeading, endPoint: .bottomTrailing)
-            }
-        }
+        // The sheet's own ground, flat. This was a system material under a
+        // blue gradient in the glass theme; the drawing sheet has no
+        // gradients, and a material shifts with the wallpaper so the
+        // linework would read differently on every home screen. In tinted
+        // or clear home screen modes the system drops this background anyway.
+        .containerBackground(Argon.Ink.base, for: .widget)
     }
     .configurationDisplayName("Argon")
     .description("What's due, and whether Argon is watching.")
@@ -57,43 +47,55 @@ struct ArgonTodayWidgetView: View {
   let snapshot: ArgonSnapshot
   @Environment(\.widgetFamily) private var family
 
+  private var small: Bool { family == .systemSmall }
+  /// The lock screen draws in one vibrant colour; lines and washes vanish.
+  private var accessory: Bool { family == .accessoryRectangular }
+
   var body: some View {
     VStack(alignment: .leading, spacing: 5) {
       HStack(spacing: 6) {
-        Circle()
-          .fill(snapshot.watching ? ArgonWidgetPalette.running
-                                  : ArgonWidgetPalette.mutedInk)
-          .frame(width: 6, height: 6)
+        ArgonPulse(colour: snapshot.watching ? Argon.running : Argon.Tone.faint)
         Text(snapshot.watching ? "watching" : "off duty")
-          .font(.system(size: 10, weight: .medium))
-          .foregroundStyle(ArgonWidgetPalette.mutedInk)
-        Spacer()
+          .font(.caption2.weight(.medium).width(.expanded))
+          .foregroundStyle(Argon.Tone.secondary)
+        Spacer(minLength: 4)
         if snapshot.overdue > 0 {
-          Text("\(snapshot.overdue)")
-            .font(.system(size: 10, weight: .semibold))
-            .foregroundStyle(ArgonWidgetPalette.danger)
+          // Red only as a tint over red.
+          ArgonPill(text: "\(snapshot.overdue) late", colour: Argon.overdue,
+                    tinted: !accessory)
         }
+      }
+
+      if !accessory {
+        // A construction line under the status, running past the content
+        // into the widget's margin like every box edge in the app.
+        Rectangle().fill(Argon.line).frame(height: 1)
+          .padding(.horizontal, -Argon.overshoot)
+          .padding(.top, 2)
       }
 
       Spacer(minLength: 2)
 
       Text(snapshot.headline)
-        .font(.system(size: family == .systemSmall ? 14 : 16, weight: .semibold))
-        .foregroundStyle(ArgonWidgetPalette.ink)
-        .lineLimit(family == .systemSmall ? 3 : 2)
+        .font(small ? .subheadline.weight(.semibold) : .headline)
+        .foregroundStyle(Argon.Tone.primary)
+        .lineLimit(small ? 3 : 2)
 
       if !snapshot.detail.isEmpty {
-        Text(snapshot.detail)
-          .font(.system(size: 11))
-          .foregroundStyle(snapshot.detail == "overdue" ? ArgonWidgetPalette.danger
-                                                        : ArgonWidgetPalette.mutedInk)
-          .lineLimit(1)
+        if snapshot.detail == "overdue" {
+          ArgonPill(text: snapshot.detail, colour: Argon.overdue, tinted: !accessory)
+        } else {
+          Text(snapshot.detail)
+            .font(.caption)
+            .foregroundStyle(Argon.Tone.secondary)
+            .lineLimit(1)
+        }
       }
 
       if snapshot.open > 1 {
         Text("\(snapshot.open) open")
-          .font(.system(size: 10))
-          .foregroundStyle(ArgonWidgetPalette.mutedInk)
+          .font(.caption2.monospacedDigit())
+          .foregroundStyle(Argon.Tone.faint)
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)

@@ -40,61 +40,63 @@ struct ArgonPlannerView: View {
   private let steps = ["Long-term", "Past due", "Anything else", "Your day"]
 
   var body: some View {
-    NavigationStack {
-      VStack(spacing: 0) {
-        progress
-        ArgonDivider()
+    VStack(spacing: 0) {
+      header
 
-        Group {
-          switch step {
-          case 0: longTermStep
-          case 1: overdueStep
-          case 2: extrasStep
-          default: dayStep
-          }
+      Group {
+        switch step {
+        case 0: longTermStep
+        case 1: overdueStep
+        case 2: extrasStep
+        default: dayStep
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-        ArgonDivider()
-        controls
       }
-      .background(ArgonPalette.canvas.ignoresSafeArea())
-      .navigationTitle(steps[min(step, steps.count - 1)])
-      .navigationBarTitleDisplayMode(.inline)
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+      controls
     }
+    .argonAmbience()
+    .tint(Argon.accent)
     .preferredColorScheme(.dark)
     .interactiveDismissDisabled(isSaving)
   }
 
   // MARK: - Chrome
 
-  private var progress: some View {
-    HStack(spacing: 6) {
-      ForEach(0..<steps.count, id: \.self) { index in
-        Capsule()
-          .fill(index <= step ? Argon.accent : ArgonPalette.mutedInk.opacity(0.25))
-          .frame(height: 3)
-      }
+  /// The ruler, then the step's name. The steps are a real sequence, so they
+  /// are drawn as one: stations on a single construction line.
+  private var header: some View {
+    VStack(alignment: .leading, spacing: 14) {
+      PlannerRuler(count: steps.count, at: step)
+        .padding(.top, 22)
+      Text(steps[min(step, steps.count - 1)])
+        .font(Argon.screenTitle)
+        .foregroundStyle(Argon.Tone.primary)
+        .contentTransition(.opacity)
     }
-    .padding(.horizontal, 16)
-    .padding(.vertical, 10)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .padding(.horizontal, Argon.margin)
   }
 
   private var controls: some View {
-    HStack {
+    HStack(spacing: 12) {
       if step > 0 {
         Button("Back") { withAnimation { step -= 1 } }
-          .buttonStyle(ArgonSecondaryButtonStyle())
-          .frame(maxWidth: 110)
+          .font(Argon.body)
+          .foregroundStyle(Argon.Tone.secondary)
+          .buttonStyle(.plain)
+          .frame(minWidth: 64, minHeight: 48)
       }
-      Spacer()
       Button(step == steps.count - 1 ? (isSaving ? "Saving…" : "Start the day") : "Next") {
         if step == steps.count - 1 { save() } else { withAnimation { step += 1 } }
       }
-      .buttonStyle(ArgonPrimaryButtonStyle())
+      .buttonStyle(ArgonButtonStyle())
       .disabled(isSaving || !canAdvance)
+      .opacity(isSaving || !canAdvance ? 0.4 : 1)
     }
-    .padding(16)
+    .padding(.horizontal, Argon.margin - 6)
+    .padding(.vertical, 8)
+    .overlay(alignment: .top) { ArgonDivider() }
   }
 
   /// The only gate: every late item gets an answer. "Later" is an answer; not
@@ -113,13 +115,15 @@ struct ArgonPlannerView: View {
       if payload.longTerm.isEmpty {
         emptyLine("No long-term work on the board.")
       } else {
-        ForEach(payload.longTerm) { item in
-          ArgonChoiceButton(
-            title: item.title,
-            caption: [item.subject, item.due.map(ArgonDate.short) ?? ""]
-              .filter { !$0.isEmpty }.joined(separator: " · "),
-            isSelected: longTermPicked.contains(item.id)
-          ) { toggle(item.id, in: &longTermPicked) }
+        box {
+          ForEach(Array(payload.longTerm.enumerated()), id: \.element.id) { i, item in
+            if i > 0 { ArgonDivider() }
+            choice(item.title, caption: item.subject,
+                   due: item.due.map(ArgonDate.short),
+                   on: longTermPicked.contains(item.id)) {
+              toggle(item.id, in: &longTermPicked)
+            }
+          }
         }
       }
     }
@@ -133,49 +137,41 @@ struct ArgonPlannerView: View {
       if payload.overdue.isEmpty {
         emptyLine("Nothing is past due.")
       } else {
-        ArgonChoiceButton(
-          title: "All of it is done",
-          caption: "Marks every item below done",
-          isSelected: allDone
-        ) {
-          let on = !allDone
-          for item in payload.overdue { answers[item.id] = on ? .done : nil }
+        box {
+          choice("All of it is done", caption: "Marks every item below done",
+                 on: allDone) {
+            let on = !allDone
+            for item in payload.overdue { answers[item.id] = on ? .done : nil }
+          }
         }
 
-        ForEach(payload.overdue) { item in
-          VStack(alignment: .leading, spacing: 6) {
-            Text(item.title).font(.subheadline).foregroundStyle(ArgonPalette.ink)
-            let caption = [item.subject, item.staleness ?? ""].filter { !$0.isEmpty }
-            if !caption.isEmpty {
-              Text(caption.joined(separator: " · "))
-                .font(.caption2).foregroundStyle(ArgonPalette.warning)
-            }
-            HStack(spacing: 8) {
-              ForEach(item.answers, id: \.self) { answer in
-                answerButton(answer, for: item.id)
+        box {
+          ForEach(Array(payload.overdue.enumerated()), id: \.element.id) { i, item in
+            if i > 0 { ArgonDivider() }
+            VStack(alignment: .leading, spacing: 10) {
+              HStack(alignment: .firstTextBaseline, spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                  Text(item.title).font(Argon.body).foregroundStyle(Argon.Tone.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+                  if !item.subject.isEmpty {
+                    Text(item.subject).font(Argon.label).foregroundStyle(Argon.Tone.faint)
+                  }
+                }
+                Spacer(minLength: 8)
+                if let late = item.staleness {
+                  // Red as a tint over red: the lateness, and nothing else.
+                  ArgonPill(text: late, colour: Argon.overdue, tinted: true)
+                }
+              }
+              AnswerSegments(options: item.answers, chosen: answers[item.id]) { answer in
+                answers[item.id] = answers[item.id] == answer ? nil : answer
               }
             }
+            .padding(.horizontal, 14).padding(.vertical, 14)
           }
-          .padding(.vertical, 4)
         }
       }
     }
-  }
-
-  private func answerButton(_ answer: ArgonOverdueAnswer, for id: String) -> some View {
-    let chosen = answers[id] == answer
-    return Button {
-      answers[id] = chosen ? nil : answer
-    } label: {
-      Text(answer.label)
-        .font(.system(size: 13, weight: .medium))
-        .foregroundStyle(chosen ? ArgonPalette.ink : ArgonPalette.mutedInk)
-        .frame(maxWidth: .infinity)
-        .frame(height: 44)
-        .argonSelectable(chosen, cornerRadius: 10)
-        .contentShape(Rectangle())
-    }
-    .buttonStyle(.plain)
   }
 
   private var extrasStep: some View {
@@ -183,30 +179,52 @@ struct ArgonPlannerView: View {
       question: "Anything else on today?",
       note: "AP Chem is here because nothing else can see it — it is never assumed either way."
     ) {
-      ForEach(payload.suggestions) { suggestion in
-        ArgonChoiceButton(
-          title: suggestion.kind == "chem"
-            ? (suggestion.prompt ?? suggestion.title) : suggestion.title,
-          caption: suggestion.kind == "chem"
-            ? "Adds “\(suggestion.title)” for tonight"
-            : (suggestion.prompt ?? suggestion.subject ?? ""),
-          isSelected: accepted.contains(suggestion.id)
-        ) { toggle(suggestion.id, in: &accepted) }
+      box {
+        ForEach(payload.suggestions) { suggestion in
+          choice(suggestion.kind == "chem"
+                   ? (suggestion.prompt ?? suggestion.title) : suggestion.title,
+                 caption: suggestion.kind == "chem"
+                   ? "Adds “\(suggestion.title)” for tonight"
+                   : (suggestion.prompt ?? suggestion.subject ?? ""),
+                 on: accepted.contains(suggestion.id)) {
+            toggle(suggestion.id, in: &accepted)
+          }
+          ArgonDivider()
+        }
+        ForEach(extras, id: \.self) { title in
+          HStack(spacing: 12) {
+            DraftCheck(on: true)
+            Text(title).font(Argon.body).foregroundStyle(Argon.Tone.primary)
+            Spacer(minLength: 0)
+          }
+          .padding(.horizontal, 14).padding(.vertical, 12)
+          ArgonDivider()
+        }
+        addRow
       }
-      ForEach(extras, id: \.self) { title in
-        Label(title, systemImage: "checkmark.circle.fill")
-          .font(.subheadline)
-          .foregroundStyle(Argon.running)
-      }
-      HStack {
-        TextField("Something else", text: $newTitle)
-          .submitLabel(.done)
-          .onSubmit(addTyped)
-        Button(action: addTyped) { Image(systemName: "plus.circle.fill") }
-          .disabled(newTitle.trimmingCharacters(in: .whitespaces).isEmpty)
-      }
-      .padding(.top, 4)
     }
+  }
+
+  private var addRow: some View {
+    let empty = newTitle.trimmingCharacters(in: .whitespaces).isEmpty
+    return HStack(spacing: 12) {
+      Image(systemName: "plus")
+        .font(.footnote.weight(.semibold))
+        .foregroundStyle(Argon.accent)
+        .frame(width: 18)
+      TextField("", text: $newTitle,
+                prompt: Text("Something else").foregroundStyle(Argon.Tone.faint))
+        .font(Argon.body).foregroundStyle(Argon.Tone.primary)
+        .submitLabel(.done)
+        .onSubmit(addTyped)
+      if !empty {
+        Button("Add", action: addTyped)
+          .font(Argon.detail.weight(.medium))
+          .foregroundStyle(Argon.accent)
+          .buttonStyle(.plain)
+      }
+    }
+    .padding(.horizontal, 14).padding(.vertical, 12)
   }
 
   private var dayStep: some View {
@@ -214,19 +232,36 @@ struct ArgonPlannerView: View {
       question: "Here's your day. When do you want to start?",
       note: "You'll get a notification \(payload.warningMinutes) minutes before, and on a school night your phone locks down at that time. Not choosing means \(payload.defaultStart)."
     ) {
-      ForEach(plannedTitles, id: \.self) { title in
-        Label(title, systemImage: "circle")
-          .font(.subheadline)
-          .foregroundStyle(ArgonPalette.ink)
-      }
+      caption("Tonight", count: plannedTitles.count)
       if plannedTitles.isEmpty {
         emptyLine("Nothing planned — a clear evening.")
+      } else {
+        box {
+          ForEach(Array(plannedTitles.enumerated()), id: \.offset) { i, title in
+            if i > 0 { ArgonDivider() }
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+              Text("\(i + 1)")
+                .font(Argon.mono).foregroundStyle(Argon.Tone.faint)
+                .frame(width: 18, alignment: .leading)
+              Text(title).font(Argon.body).foregroundStyle(Argon.Tone.primary)
+              Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 14).padding(.vertical, 12)
+          }
+        }
       }
 
-      ArgonDivider().padding(.vertical, 6)
-
-      DatePicker("Start at", selection: $startAt, displayedComponents: .hourAndMinute)
-        .datePickerStyle(.compact)
+      caption("Start", count: nil).padding(.top, 6)
+      box(stroke: Argon.accent.opacity(0.55)) {
+        HStack {
+          Text("Start at").font(Argon.body).foregroundStyle(Argon.Tone.primary)
+          Spacer()
+          DatePicker("Start at", selection: $startAt, displayedComponents: .hourAndMinute)
+            .labelsHidden()
+            .datePickerStyle(.compact)
+        }
+        .padding(.horizontal, 14).padding(.vertical, 8)
+      }
     }
   }
 
@@ -236,25 +271,76 @@ struct ArgonPlannerView: View {
     question: String, note: String, @ViewBuilder content: () -> Content
   ) -> some View {
     ScrollView {
-      VStack(alignment: .leading, spacing: 14) {
-        Text(question)
-          .font(.title3.weight(.semibold))
-          .foregroundStyle(ArgonPalette.ink)
-          .fixedSize(horizontal: false, vertical: true)
-        Text(note)
-          .font(.caption)
-          .foregroundStyle(ArgonPalette.mutedInk)
-          .fixedSize(horizontal: false, vertical: true)
-        VStack(alignment: .leading, spacing: 10) { content() }
-          .padding(.top, 4)
+      VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
+          Text(question)
+            .font(Argon.heading)
+            .foregroundStyle(Argon.Tone.primary)
+            .fixedSize(horizontal: false, vertical: true)
+          Text(note)
+            .font(Argon.label)
+            .foregroundStyle(Argon.Tone.faint)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, Argon.overshoot)
+        .padding(.bottom, 10)
+
+        content()
       }
       .frame(maxWidth: .infinity, alignment: .leading)
-      .padding(20)
+      // The boxes' vertical lines sit at `margin`; their overshoot lives in
+      // the gap, as on every other screen.
+      .padding(.horizontal, Argon.margin - Argon.overshoot)
+      .padding(.top, 12)
+      .padding(.bottom, 24)
+    }
+    .scrollIndicators(.hidden)
+  }
+
+  /// A draft box of rows. The rows draw their own rules between them.
+  private func box<C: View>(stroke: Color = Argon.line,
+                            @ViewBuilder _ content: () -> C) -> some View {
+    ArgonGlass(padding: 0, stroke: stroke) {
+      VStack(alignment: .leading, spacing: 0) { content() }
     }
   }
 
+  /// A row that is a yes or no: the square checkbox, the words, maybe a date.
+  private func choice(_ title: String, caption: String, due: String? = nil,
+                      on: Bool, action: @escaping () -> Void) -> some View {
+    Button(action: action) {
+      HStack(alignment: .firstTextBaseline, spacing: 12) {
+        DraftCheck(on: on)
+          .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 3 }
+        VStack(alignment: .leading, spacing: 2) {
+          Text(title).font(Argon.body).foregroundStyle(Argon.Tone.primary)
+            .multilineTextAlignment(.leading)
+            .fixedSize(horizontal: false, vertical: true)
+          if !caption.isEmpty {
+            Text(caption).font(Argon.label).foregroundStyle(Argon.Tone.faint)
+              .multilineTextAlignment(.leading)
+          }
+        }
+        Spacer(minLength: 8)
+        if let due { ArgonPill(text: due, colour: Argon.Tone.faint) }
+      }
+      .padding(.horizontal, 14)
+      .padding(.vertical, 12)
+      .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+      .background(on ? Argon.accent.opacity(0.06) : .clear)
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .accessibilityAddTraits(on ? .isSelected : [])
+  }
+
+  private func caption(_ title: String, count: Int?) -> some View {
+    DraftSectionLabel(title: title, count: count).padding(.horizontal, Argon.overshoot)
+  }
+
   private func emptyLine(_ text: String) -> some View {
-    Text(text).font(.subheadline).foregroundStyle(ArgonPalette.mutedInk)
+    Text(text).font(Argon.body).foregroundStyle(Argon.Tone.faint)
+      .padding(.horizontal, Argon.overshoot)
   }
 
   private var allDone: Bool {
@@ -299,5 +385,86 @@ struct ArgonPlannerView: View {
       isSaving = false
       dismiss()
     }
+  }
+}
+
+// MARK: - drawing
+
+/// Progress as a drafting rule: one line with a tick at each station. Done
+/// stretches of the line and their ticks are blue; the current station stands
+/// taller than the rest. The line overshoots the end ticks like every other
+/// construction line in the app.
+private struct PlannerRuler: View {
+  let count: Int
+  let at: Int
+
+  var body: some View {
+    GeometryReader { g in
+      let o = Argon.overshoot, w = g.size.width, y: CGFloat = 8
+      let gap = (w - 2 * o) / CGFloat(max(count - 1, 1))
+      let x = { (i: Int) in o + CGFloat(i) * gap }
+      ZStack(alignment: .topLeading) {
+        Path { p in
+          p.move(to: CGPoint(x: 0, y: y)); p.addLine(to: CGPoint(x: w, y: y))
+          for i in (at + 1)..<max(count, at + 1) {
+            p.move(to: CGPoint(x: x(i), y: y - 4)); p.addLine(to: CGPoint(x: x(i), y: y + 4))
+          }
+        }
+        .stroke(Argon.lineStrong, lineWidth: 1)
+
+        Path { p in
+          p.move(to: CGPoint(x: 0, y: y)); p.addLine(to: CGPoint(x: x(at), y: y))
+          for i in 0..<at {
+            p.move(to: CGPoint(x: x(i), y: y - 4)); p.addLine(to: CGPoint(x: x(i), y: y + 4))
+          }
+          p.move(to: CGPoint(x: x(at), y: y - 8)); p.addLine(to: CGPoint(x: x(at), y: y + 8))
+        }
+        .stroke(Argon.accent, lineWidth: 1)
+
+        ForEach(0..<count, id: \.self) { i in
+          Text("\(i + 1)")
+            .font(Argon.label.monospacedDigit())
+            .foregroundStyle(i == at ? Argon.accent : Argon.Tone.faint)
+            .fixedSize()
+            .position(x: x(i), y: y + 20)
+        }
+      }
+    }
+    .frame(height: 36)
+    .animation(.snappy(duration: 0.25), value: at)
+    .accessibilityElement()
+    .accessibilityLabel("Step \(at + 1) of \(count)")
+  }
+}
+
+/// The three answers a late item can take, as one outlined bar split in
+/// three. The chosen third is outlined and washed in blue.
+private struct AnswerSegments: View {
+  let options: [ArgonOverdueAnswer]
+  let chosen: ArgonOverdueAnswer?
+  let pick: (ArgonOverdueAnswer) -> Void
+
+  var body: some View {
+    HStack(spacing: 0) {
+      ForEach(Array(options.enumerated()), id: \.element) { i, answer in
+        let on = chosen == answer
+        if i > 0 { Rectangle().fill(Argon.line).frame(width: 1) }
+        Button { pick(answer) } label: {
+          Text(answer.label)
+            .font(Argon.detail.weight(on ? .medium : .regular))
+            .foregroundStyle(on ? Argon.accent : Argon.Tone.secondary)
+            .lineLimit(1).minimumScaleFactor(0.8)
+            .frame(maxWidth: .infinity, minHeight: 40)
+            .background(on ? Argon.accent.opacity(0.14) : .clear)
+            .overlay(Rectangle().strokeBorder(on ? Argon.accent.opacity(0.7) : .clear,
+                                              lineWidth: 1))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(on ? .isSelected : [])
+      }
+    }
+    .fixedSize(horizontal: false, vertical: true)
+    .overlay(Rectangle().strokeBorder(Argon.line, lineWidth: 1))
   }
 }

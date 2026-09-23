@@ -37,7 +37,7 @@ struct ArgonRichText: View {
           Text(ArgonMarkdown.inline(t))
 
         case .bullet(let t):
-          row(marker: Text("•"), text: t)
+          row(marker: Text("–"), text: t)
 
         case .numbered(let i, let t):
           row(marker: Text("\(i).").monospacedDigit(), text: t)
@@ -49,15 +49,17 @@ struct ArgonRichText: View {
           buttons(row)
 
         case .divider:
-          Rectangle().fill(Argon.hairline).frame(height: 1).padding(.vertical, 3)
+          ArgonDivider().padding(.vertical, 3)
         }
       }
     }
   }
 
   private func row(marker: Text, text: String) -> some View {
-    HStack(alignment: .firstTextBaseline, spacing: 8) {
-      marker.fontWeight(.semibold).foregroundStyle(Argon.accentSoft)
+    HStack(alignment: .firstTextBaseline, spacing: 10) {
+      // Quiet: blue is kept for what can be pressed.
+      marker.foregroundStyle(Argon.Tone.faint)
+        .frame(minWidth: 18, alignment: .leading)
       Text(ArgonMarkdown.inline(text))
       Spacer(minLength: 0)
     }
@@ -66,11 +68,13 @@ struct ArgonRichText: View {
   private func buttons(_ row: [ArgonAction]) -> some View {
     // Wraps rather than truncating: three long labels overflow a phone-width
     // bubble, and a clipped "Start Chem la…" hides which task it starts.
+    // Spacing leaves room for each button's overshooting corners, so
+    // neighbours' construction lines do not run into one another.
     ViewThatFits(in: .horizontal) {
-      HStack(spacing: 8) { buttonRow(row) }
-      VStack(alignment: .leading, spacing: 8) { buttonRow(row) }
+      HStack(spacing: 14) { buttonRow(row) }
+      VStack(alignment: .leading, spacing: 16) { buttonRow(row) }
     }
-    .padding(.top, 2)
+    .padding(.vertical, 6).padding(.horizontal, 5)
   }
 
   @ViewBuilder
@@ -79,12 +83,14 @@ struct ArgonRichText: View {
       let live = onAction != nil && action.target(in: tasks) != nil
       Button { onAction?(action) } label: {
         Text(action.label)
-          .font(Argon.detail.weight(.semibold))
+          .font(Argon.detail.weight(.medium))
           .foregroundStyle(live ? Argon.accent : Argon.Tone.faint)
-          .padding(.horizontal, 12).padding(.vertical, 6)
-          .background(Argon.Ink.raised,
-                      in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+          .padding(.horizontal, 12).padding(.vertical, 8)
+          .draftBox(stroke: live ? Argon.accent.opacity(0.6) : Argon.line,
+                    fill: live ? Argon.accent.opacity(0.08) : .clear,
+                    overshoot: 5)
           .fixedSize()
+          .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
       .disabled(!live)
@@ -98,9 +104,9 @@ struct ArgonRichText: View {
       ticks[id] = !on
       ArgonCheckboxState.set(id, !on)
     } label: {
-      HStack(alignment: .firstTextBaseline, spacing: 8) {
-        Image(systemName: on ? "checkmark.circle.fill" : "circle")
-          .foregroundStyle(on ? Argon.accent : Argon.Tone.secondary)
+      HStack(alignment: .firstTextBaseline, spacing: 10) {
+        DraftCheck(on: on)
+          .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 3 }
         Text(ArgonMarkdown.inline(text))
           .strikethrough(on, color: Argon.Tone.faint)
           .foregroundStyle(on ? Argon.Tone.faint : Argon.Tone.primary)
