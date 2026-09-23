@@ -30,7 +30,7 @@ struct ArgonStatusCard: View {
   }
 
   private var card: some View {
-    ArgonGlass(tint: tint, padding: 14) {
+    ArgonGlass(padding: 14) {
       HStack(spacing: 12) {
         marker
         VStack(alignment: .leading, spacing: 2) {

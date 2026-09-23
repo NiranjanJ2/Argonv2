@@ -1,248 +1,279 @@
 import SwiftUI
 
-/// The look: blue-slate, glass, dark.
+/// The look: a drawing sheet. Blue-black ground, fine linework, one blue.
 ///
-/// Three rules this file exists to enforce, each written after getting it
-/// wrong:
+/// This replaced a navy "glass" theme — blooms behind titles, gradient washes
+/// on every card, glows under buttons, a light field that moved with the hour.
+/// Each piece was defensible alone; together they read as generated. His brief
+/// for the replacement (2026-09-22): intentional and minimal, with lines —
+/// "draft lines extending past boxes"; blue as the main colour and a blue tint
+/// for general surfaces, not in the AI-looking way; no bright reds or greens;
+/// red only as a tint over a red.
 ///
-/// **Type is Dynamic Type.** Never `Font.system(size:)`. Fixed sizes ignore the
-/// text size he has chosen in Settings, and the first version of this screen
-/// used 15pt body where iOS uses 17 — small for everyone and unreadable for
-/// anyone who had turned text up.
+/// **The one bold thing is the linework.** Boxes are outlines, not fills, and
+/// their edges run a few points past the corners like construction lines on a
+/// technical drawing (`DraftFrame`). Everything else stays quiet so that reads.
 ///
-/// **Blue is the subject, not an accent.** A slate palette with one desaturated
-/// blue used only on small pills reads as grey, and then the single warm colour
-/// — meant for overdue work — becomes the loudest thing on screen.
+/// **Blue carries all the colour.** Things to press, today, a task running.
+/// There is no green.
 ///
-/// **Decoration must not affect layout.** The ambient field is applied with
-/// `.argonAmbience()`, which puts it in a `background`. As a ZStack sibling its
-/// 575pt blooms sized the whole stack and pushed the content off a 390pt phone.
+/// **Red is a tint, never a fill.** Soft red text on a faint red wash — late
+/// work and failures only.
+///
+/// **No decoration.** No gradients, shadows, blur or glow. Square corners.
+///
+/// **Type is Dynamic Type.** Titles use SF Pro's expanded width, which has the
+/// flat, even set of drawing-sheet lettering; everything else is plain SF Pro.
 enum Argon {
 
   // MARK: ground
 
-  /// Navy-slate rather than near-black. True black leaves nothing for glass to
-  /// refract and drains the blue out of everything above it.
   enum Ink {
-    static let base = Color(red: 0.035, green: 0.055, blue: 0.094)   // #090E18
-    static let deep = Color(red: 0.055, green: 0.082, blue: 0.137)   // #0E1523
-    static let slate = Color(red: 0.094, green: 0.129, blue: 0.196)  // #182132
-    static let raised = Color(red: 0.137, green: 0.180, blue: 0.263) // #232E43
+    static let base = Color(red: 0.039, green: 0.051, blue: 0.071)   // #0A0D12
+    static let deep = base
+    /// A barely-there fill, for the few places a surface must read as pressed.
+    static let slate = Color(red: 0.063, green: 0.078, blue: 0.106)  // #10141B
+    static let raised = Color(red: 0.094, green: 0.114, blue: 0.153) // #181D27
   }
 
   enum Tone {
-    static let primary = Color(red: 0.937, green: 0.957, blue: 0.984)
-    static let secondary = Color(red: 0.639, green: 0.702, blue: 0.788)
-    // Lifted for contrast: at the old value this was 4.02:1 on the card
-    // ground and 3.39:1 on a raised one, under the 4.5:1 minimum — and it
-    // carries subject lines, empty-state text and the date pills.
-    static let faint = Color(red: 0.522, green: 0.576, blue: 0.659)
+    static let primary = Color(red: 0.902, green: 0.922, blue: 0.949)   // #E6EBF2
+    static let secondary = Color(red: 0.553, green: 0.596, blue: 0.667) // #8D98AA
+    /// 4.5:1 on the ground — subject lines, empty states.
+    static let faint = Color(red: 0.463, green: 0.510, blue: 0.584)     // #768295
   }
 
-  /// Vivid enough to read as blue on a dark ground. The previous #6EA8D8 was
-  /// close enough to grey that the screen had no colour in it at all.
-  static let accent = Color(red: 0.302, green: 0.639, blue: 1.0)      // #4DA3FF
-  static let accentSoft = Color(red: 0.514, green: 0.761, blue: 1.0)  // #83C2FF
-  static let accentDeep = Color(red: 0.149, green: 0.404, blue: 0.769) // #2667C4
+  /// Construction lines: the box edges and the rules between rows.
+  static let line = Color(red: 0.149, green: 0.188, blue: 0.275)        // #263046
+  /// A box edge he should notice — the brief, the running task.
+  static let lineStrong = Color(red: 0.204, green: 0.259, blue: 0.353)  // #34425A
 
-  /// Green means running. Red means late. Nothing else is coloured, so that
-  /// when something is, it means something.
-  static let running = Color(red: 0.325, green: 0.847, blue: 0.588)
-  static let overdue = Color(red: 0.984, green: 0.353, blue: 0.376)
+  static let accent = Color(red: 0.357, green: 0.576, blue: 0.961)      // #5B93F5
+  static let accentSoft = accent
+  static let accentDeep = accent
 
-  static let hairline = Color.white.opacity(0.10)
-  static let hairlineBright = Color.white.opacity(0.22)
+  /// A task running. Blue, not green.
+  static let running = accent
+  /// Late work and failures. Only ever shown over its own tint.
+  static let overdue = Color(red: 0.910, green: 0.455, blue: 0.431)     // #E8746E
+
+  static let hairline = line
+  static let hairlineBright = lineStrong
+
+  /// How far a construction line runs past the corner it draws.
+  static let overshoot: CGFloat = 9
+  /// The gap between the screen edge and a box's vertical lines.
+  static let margin: CGFloat = 18
 
   // MARK: type — all Dynamic Type
 
-  static let screenTitle = Font.largeTitle.weight(.bold)
-  static let cardTitle = Font.title3.weight(.semibold)
+  static let screenTitle = Font.largeTitle.weight(.semibold).width(.expanded)
+  static let cardTitle = Font.headline
   static let heading = Font.headline
   static let body = Font.body
   static let detail = Font.subheadline
-  static let label = Font.footnote.weight(.medium)
-  static let mono = Font.system(.footnote, design: .monospaced).weight(.medium)
+  static let label = Font.footnote
+  /// Section names: small, wide, quiet. Sentence case — never tracked capitals.
+  static let caption = Font.footnote.weight(.medium).width(.expanded)
+  static let mono = Font.footnote.monospacedDigit()
 }
 
-// MARK: - the ambient field
+extension View {
+  /// The screen's ground.
+  func argonAmbience() -> some View {
+    background(Argon.Ink.base.ignoresSafeArea())
+  }
+}
 
-/// The background knows what time it is.
+// MARK: - linework
+
+/// Four edges of a rectangle, each running `overshoot` past both corners.
 ///
-/// Argon watches from four until midnight on school nights and is off duty
-/// otherwise. Rather than print that, the room behind the glass says it: warm
-/// and lit while he is being watched over, cold and still when Argon is
-/// resting.
-private struct ArgonAmbience: View {
-  var evening: Double
-  var resting: Bool
+/// Stroke it at 1pt. Drawn as four separate lines rather than a rectangle so
+/// the ends can pass each other — that crossing at every corner is the whole
+/// look.
+struct DraftFrame: Shape {
+  var overshoot: CGFloat = Argon.overshoot
+  var edges: Edge.Set = .all
+
+  func path(in r: CGRect) -> Path {
+    var p = Path()
+    let o = overshoot
+    if edges.contains(.top) {
+      p.move(to: CGPoint(x: r.minX - o, y: r.minY)); p.addLine(to: CGPoint(x: r.maxX + o, y: r.minY))
+    }
+    if edges.contains(.bottom) {
+      p.move(to: CGPoint(x: r.minX - o, y: r.maxY)); p.addLine(to: CGPoint(x: r.maxX + o, y: r.maxY))
+    }
+    let top = edges.contains(.top) ? r.minY - o : r.minY
+    let bottom = edges.contains(.bottom) ? r.maxY + o : r.maxY
+    if edges.contains(.leading) {
+      p.move(to: CGPoint(x: r.minX, y: top)); p.addLine(to: CGPoint(x: r.minX, y: bottom))
+    }
+    if edges.contains(.trailing) {
+      p.move(to: CGPoint(x: r.maxX, y: top)); p.addLine(to: CGPoint(x: r.maxX, y: bottom))
+    }
+    return p
+  }
+}
+
+/// Where a row sits in its box, so a stack of List rows can draw one box.
+enum DraftPosition {
+  case single, first, middle, last
+
+  static func of(_ index: Int, in count: Int) -> DraftPosition {
+    if count <= 1 { return .single }
+    return index == 0 ? .first : index == count - 1 ? .last : .middle
+  }
+
+  var opens: Bool { self == .single || self == .first }
+  var closes: Bool { self == .single || self == .last }
+}
+
+/// One List row's share of a draft box: the side lines, the top edge if it
+/// opens the box, the bottom edge if it closes it, and a rule between rows.
+///
+/// Everything is drawn *inside* the row's own rect — List cells are not a
+/// safe place to draw past their bounds — so the box sits `margin` in from the
+/// screen edge and the overshoot lives in that margin.
+struct DraftRowBackground: View {
+  let position: DraftPosition
+  var stroke: Color = Argon.line
+  var fill: Color = .clear
 
   var body: some View {
-    GeometryReader { geo in
-      let w = geo.size.width, h = geo.size.height
+    GeometryReader { g in
+      let o = Argon.overshoot, m = Argon.margin
+      let box = CGRect(x: m, y: position.opens ? o : 0,
+                       width: g.size.width - 2 * m,
+                       height: g.size.height - (position.opens ? o : 0) - (position.closes ? o : 0))
       ZStack {
-        LinearGradient(colors: [Argon.Ink.deep, Argon.Ink.base],
-                       startPoint: .top, endPoint: .bottom)
-
-        bloom(top).frame(width: w * 1.5, height: w * 1.5)
-          .position(x: w * 0.18, y: h * (0.10 + 0.05 * evening))
-          .blur(radius: 60)
-
-        bloom(bottom).frame(width: w * 1.3, height: w * 1.3)
-          .position(x: w * 0.88, y: h * (0.78 - 0.06 * evening))
-          .blur(radius: 70)
+        Rectangle().fill(fill).frame(width: box.width, height: box.height)
+          .position(x: box.midX, y: box.midY)
+        Path { p in
+          // sides, extended past the box only where the box ends
+          let top = position.opens ? 0 : box.minY
+          let bottom = position.closes ? g.size.height : box.maxY
+          p.move(to: CGPoint(x: box.minX, y: top)); p.addLine(to: CGPoint(x: box.minX, y: bottom))
+          p.move(to: CGPoint(x: box.maxX, y: top)); p.addLine(to: CGPoint(x: box.maxX, y: bottom))
+          if position.opens {
+            p.move(to: CGPoint(x: box.minX - o, y: box.minY))
+            p.addLine(to: CGPoint(x: box.maxX + o, y: box.minY))
+          }
+          if position.closes {
+            p.move(to: CGPoint(x: box.minX - o, y: box.maxY))
+            p.addLine(to: CGPoint(x: box.maxX + o, y: box.maxY))
+          } else {
+            // the rule between rows stays inside the box
+            p.move(to: CGPoint(x: box.minX, y: box.maxY))
+            p.addLine(to: CGPoint(x: box.maxX, y: box.maxY))
+          }
+        }
+        .stroke(stroke, lineWidth: 1)
       }
-      // Sized to the view it decorates and clipped to it, so it can never
-      // push the content sideways.
-      .frame(width: w, height: h)
-      .clipped()
     }
-    .ignoresSafeArea()
-    .allowsHitTesting(false)
-    .animation(.easeInOut(duration: 1.2), value: resting)
-  }
-
-  private func bloom(_ colour: Color) -> some View {
-    Circle().fill(RadialGradient(colors: [colour, colour.opacity(0)],
-                                 center: .center, startRadius: 0, endRadius: 320))
-  }
-
-  // Resting is dimmer, not grey. Off duty covers every daylight hour, which
-  // is most of when he opens the app — draining the blue there meant "there
-  // is no colour" was only half fixed.
-  private var top: Color {
-    resting ? Argon.accentDeep.opacity(0.26)
-            : Argon.accentDeep.opacity(0.55 - 0.10 * evening)
-  }
-
-  private var bottom: Color {
-    let night = Color(red: 0.180, green: 0.267, blue: 0.561)
-    return resting ? night.opacity(0.22) : night.opacity(0.50 + 0.10 * evening)
   }
 }
 
 extension View {
-  /// Put the ambient field behind this view. A `background` never changes the
-  /// size of what it sits behind — which is the whole point.
-  func argonAmbience(ticking: Bool, date: Date = Date()) -> some View {
-    let hour = Calendar.current.component(.hour, from: date)
-    let evening = min(max(Double(hour - 16) / 8.0, 0), 1)
-    return background(ArgonAmbience(evening: evening, resting: !ticking))
+  /// Make a List row part of a draft box. Content is inset past the box edge,
+  /// and the rows that open or close the box leave room for the overshoot.
+  func draftRow(_ position: DraftPosition, stroke: Color = Argon.line,
+                fill: Color = .clear) -> some View {
+    let o = Argon.overshoot, inset = Argon.margin + 14
+    return listRowBackground(DraftRowBackground(position: position, stroke: stroke, fill: fill))
+      .listRowSeparator(.hidden)
+      .listRowInsets(EdgeInsets(top: position.opens ? o : 0, leading: inset,
+                                bottom: position.closes ? o : 0, trailing: inset))
+  }
+
+  /// A List row with no box: a section's name, the screen title.
+  func draftLabelRow(top: CGFloat = 18) -> some View {
+    listRowBackground(Color.clear)
+      .listRowSeparator(.hidden)
+      .listRowInsets(EdgeInsets(top: top, leading: Argon.margin, bottom: 6,
+                                trailing: Argon.margin))
   }
 }
 
-// MARK: - glass
+// MARK: - pieces
 
-/// A pane of glass. One radius, one border, one shadow, everywhere.
+/// A free-standing draft box, for screens that are not lists.
 struct ArgonGlass<Content: View>: View {
-  var tint: Color = Argon.accent
-  var padding: CGFloat = 18
+  var padding: CGFloat = 16
+  var stroke: Color = Argon.line
   @ViewBuilder var content: Content
 
   var body: some View {
     content
       .padding(padding)
       .frame(maxWidth: .infinity, alignment: .leading)
-      .background {
-        RoundedRectangle(cornerRadius: 22, style: .continuous)
-          .fill(.regularMaterial)
-          .overlay {
-            // A blue wash, so glass over a navy ground still reads as blue
-            // rather than as grey plastic.
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-              .fill(LinearGradient(
-                colors: [tint.opacity(0.22), tint.opacity(0.06)],
-                startPoint: .topLeading, endPoint: .bottomTrailing))
-          }
-          .overlay {
-            // A brighter top edge is what makes a rectangle read as glass:
-            // it is the light catching the lip.
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-              .strokeBorder(LinearGradient(
-                colors: [Argon.hairlineBright, Argon.hairline],
-                startPoint: .top, endPoint: .bottom), lineWidth: 1)
-          }
-          // Black for depth, blue for life. The blue one is what stops a card
-          // reading as grey plastic on a slate ground.
-          .shadow(color: .black.opacity(0.55), radius: 22, y: 12)
-          .shadow(color: tint.opacity(0.28), radius: 18, y: 4)
-      }
-      .environment(\.colorScheme, .dark)
-  }
-}
-
-extension View {
-  /// Light coming out of the surface, not a drop shadow under it.
-  ///
-  /// This is the quality the logo has and a flat card does not: a lit object
-  /// on a dark ground, with the falloff doing the work. Two shadows — a tight
-  /// bright one and a wide soft one — because a single radius reads as blur
-  /// rather than as glow.
-  func argonGlow(_ colour: Color = Argon.accent, strength: Double = 1) -> some View {
-    shadow(color: colour.opacity(0.45 * strength), radius: 10 * strength)
-      .shadow(color: colour.opacity(0.22 * strength), radius: 28 * strength)
-  }
-}
-
-/// The soft radial light the logo is built from. Sits behind a heading or an
-/// empty state so the screen has a source of light rather than flat fills.
-struct ArgonBloom: View {
-  var colour: Color = Argon.accent
-  var size: CGFloat = 260
-  var opacity: Double = 0.55
-
-  var body: some View {
-    Circle()
-      .fill(RadialGradient(
-        colors: [colour.opacity(opacity), colour.opacity(opacity * 0.35), .clear],
-        center: .center, startRadius: 0, endRadius: size / 2))
-      .frame(width: size, height: size)
-      .blur(radius: 26)
-      .allowsHitTesting(false)
+      .overlay(DraftFrame().stroke(stroke, lineWidth: 1))
+      .padding(Argon.overshoot)   // room for the overshoot, inside our frame
   }
 }
 
 struct ArgonDivider: View {
-  var body: some View { Rectangle().fill(Argon.hairline).frame(height: 1) }
+  var body: some View { Rectangle().fill(Argon.line).frame(height: 1) }
 }
 
-/// A status word: a due date, a period, a count.
+/// A status word: a due date, a count.
+///
+/// Plain text by default. `tinted` puts the word on a faint wash of its own
+/// colour — how red appears at all, and how "today" is marked in blue.
 struct ArgonPill: View {
   let text: String
-  var colour: Color = Argon.accentSoft
+  var colour: Color = Argon.Tone.secondary
+  var tinted = false
 
   var body: some View {
     Text(text)
-      .font(Argon.label)
+      .font(Argon.label.monospacedDigit())
       .foregroundStyle(colour)
-      .padding(.horizontal, 10).padding(.vertical, 5)
-      .background(Capsule().fill(colour.opacity(0.20)))
-      .overlay(Capsule().strokeBorder(colour.opacity(0.45), lineWidth: 1))
-      .shadow(color: colour.opacity(0.35), radius: 8)
+      .padding(.horizontal, tinted ? 6 : 0).padding(.vertical, tinted ? 2 : 0)
+      .background(tinted ? colour.opacity(0.14) : .clear)
       .fixedSize(horizontal: true, vertical: false)
   }
 }
 
-/// A quiet pulse, for the one thing that is genuinely live.
-///
-/// Honours Reduce Motion: a dot that never stops expanding is exactly what
-/// that setting exists to stop. The glow stays, so the meaning survives
-/// without the movement.
+/// A task running: a small filled blue square — the checkbox's own shape, lit.
 struct ArgonPulse: View {
   var colour: Color = Argon.running
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @State private var on = false
 
   var body: some View {
-    Circle()
-      .fill(colour)
-      .frame(width: 9, height: 9)
-      .accessibilityHidden(true)
-      .shadow(color: colour.opacity(0.9), radius: 7)
-      .overlay(Circle().stroke(colour.opacity(on ? 0 : 0.7), lineWidth: on ? 9 : 0))
-      .opacity(on ? 0.8 : 1)
-      .animation(reduceMotion ? nil
-                              : .easeOut(duration: 1.8).repeatForever(autoreverses: false),
-                 value: on)
-      .onAppear { if !reduceMotion { on = true } }
+    Rectangle().fill(colour).frame(width: 8, height: 8).accessibilityHidden(true)
+  }
+}
+
+/// The checkbox: a square, as on a form. Filled blue with a tick when done.
+struct DraftCheck: View {
+  let on: Bool
+
+  var body: some View {
+    ZStack {
+      Rectangle().strokeBorder(on ? Argon.accent : Argon.Tone.faint, lineWidth: 1)
+      if on {
+        Rectangle().fill(Argon.accent.opacity(0.18))
+        Image(systemName: "checkmark").font(.caption2.weight(.bold))
+          .foregroundStyle(Argon.accent)
+      }
+    }
+    .frame(width: 18, height: 18)
+  }
+}
+
+/// An outlined button with draft corners. `prominent` adds a blue wash.
+struct ArgonButtonStyle: ButtonStyle {
+  var prominent = true
+
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .font(Argon.body.weight(.medium))
+      .foregroundStyle(Argon.accent)
+      .frame(maxWidth: .infinity, minHeight: 48)
+      .background(prominent ? Argon.accent.opacity(configuration.isPressed ? 0.22 : 0.12)
+                            : Color.clear)
+      .overlay(DraftFrame(overshoot: 6).stroke(Argon.accent.opacity(0.7), lineWidth: 1))
+      .padding(6)
   }
 }

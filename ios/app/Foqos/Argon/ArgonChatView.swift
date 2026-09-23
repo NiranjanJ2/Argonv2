@@ -44,7 +44,7 @@ struct ArgonChatView: View {
         }
         .foregroundStyle(Argon.overdue)
         .padding(.horizontal, 18).padding(.vertical, 10)
-        .background(.regularMaterial)
+        .background(Argon.Ink.slate)
       }
 
       composer
@@ -60,7 +60,7 @@ struct ArgonChatView: View {
       }
       return .handled
     })
-    .argonAmbience(ticking: store.state.ticking)
+    .argonAmbience()
     .task { await store.markRead() }
     .toolbar {
       // Dragging is discoverable only if you already know it. This is the
@@ -80,11 +80,7 @@ struct ArgonChatView: View {
 
   private var empty: some View {
     VStack(spacing: 8) {
-      Image(systemName: "bubble.left.and.bubble.right.fill")
-        .font(.largeTitle).foregroundStyle(Argon.accentSoft)
-        .background(ArgonBloom(size: 200))
-        .argonGlow(strength: 0.8)
-      Text(store.connection.isLive ? "Nothing yet." : "No cached conversation.")
+      Text(store.connection.isLive ? "No messages yet" : "No cached conversation")
         .font(Argon.body).foregroundStyle(Argon.Tone.secondary)
       Text("Ask what's due tonight.").font(Argon.detail).foregroundStyle(Argon.Tone.faint)
     }
@@ -99,34 +95,28 @@ struct ArgonChatView: View {
         .foregroundStyle(Argon.Tone.primary)
         .lineLimit(1...5)
         .focused($focused)
-        .padding(.horizontal, 16).padding(.vertical, 11)
-        .background {
-          Capsule().fill(.regularMaterial)
-            .overlay(Capsule().strokeBorder(Argon.hairline, lineWidth: 1))
-        }
+        .padding(.horizontal, 12).padding(.vertical, 10)
+        .overlay(DraftFrame(overshoot: 6).stroke(Argon.lineStrong, lineWidth: 1))
 
       Button(action: send) {
+        // A square key, like the checkbox: blue outline when there is
+        // something to send, a faint one when there is not.
         Image(systemName: "arrow.up")
-          .font(.body.weight(.bold))
-          // Was Tone.faint on 8% white — about 2.2:1, under the 3:1 minimum
-          // for a non-text element.
-          .foregroundStyle(canSend ? Color.white : Argon.Tone.secondary)
-          .frame(width: 42, height: 42)
-          .argonGlow(strength: canSend ? 0.9 : 0)
-          .background {
-            Circle().fill(canSend
-              ? AnyShapeStyle(LinearGradient(colors: [Argon.accent, Argon.accentDeep],
-                                             startPoint: .top, endPoint: .bottom))
-              : AnyShapeStyle(Color.white.opacity(0.08)))
-          }
+          .font(.body.weight(.semibold))
+          .foregroundStyle(canSend ? Argon.accent : Argon.Tone.faint)
+          .frame(width: 40, height: 40)
+          .background(canSend ? Argon.accent.opacity(0.12) : .clear)
+          .overlay(Rectangle().strokeBorder(canSend ? Argon.accent.opacity(0.6)
+                                                    : Argon.line, lineWidth: 1))
       }
       .buttonStyle(.plain)
       .disabled(!canSend)
       .accessibilityLabel("Send message")
       .animation(.easeOut(duration: 0.15), value: canSend)
     }
-    .padding(.horizontal, 18).padding(.vertical, 12)
-    .background(.regularMaterial)
+    .padding(.horizontal, 22).padding(.vertical, 12)
+    .background(Argon.Ink.base)
+    .overlay(alignment: .top) { ArgonDivider() }
   }
 
   private var canSend: Bool { !draft.trimmingCharacters(in: .whitespaces).isEmpty }
@@ -161,9 +151,8 @@ struct ArgonTyping: View {
         }
       }
     }
-    .padding(.horizontal, 16).padding(.vertical, 14)
-    .background(RoundedRectangle(cornerRadius: 20, style: .continuous)
-      .fill(.ultraThinMaterial))
+    .padding(.leading, 14).padding(.vertical, 6)
+    .overlay(alignment: .leading) { ArgonRule() }
     .frame(maxWidth: .infinity, alignment: .leading)
     .accessibilityLabel("Argon is replying")
   }
@@ -182,29 +171,9 @@ struct ArgonBubble: View {
         content
           .font(Argon.body)
           .textSelection(.enabled)
-          .foregroundStyle(message.isFromArgon ? Argon.Tone.primary : Color.white)
-          .padding(.horizontal, 15).padding(.vertical, 11)
-          .background {
-            if message.isFromArgon {
-              // 10% accent over regularMaterial reads as plain grey on a dark
-              // ground — the material's own opacity swallows it. A thinner
-              // material and a real gradient let the blue actually arrive,
-              // while staying clearly lighter than his own solid-blue bubble.
-              RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(.ultraThinMaterial)
-                .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous)
-                  .fill(LinearGradient(
-                    colors: [Argon.accent.opacity(0.26), Argon.accentDeep.opacity(0.20)],
-                    startPoint: .topLeading, endPoint: .bottomTrailing)))
-                .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous)
-                  .strokeBorder(Argon.hairlineBright, lineWidth: 1))
-            } else {
-              RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(LinearGradient(colors: [Argon.accent, Argon.accentDeep],
-                                     startPoint: .topLeading, endPoint: .bottomTrailing))
-                .opacity(message.pending ? 0.5 : 1)
-            }
-          }
+          .foregroundStyle(Argon.Tone.primary)
+          .modifier(BubbleFrame(fromArgon: message.isFromArgon))
+          .opacity(message.pending ? 0.6 : 1)
         if message.pending {
           Text("sending…").font(Argon.label).foregroundStyle(Argon.Tone.faint)
         }
@@ -222,5 +191,37 @@ struct ArgonBubble: View {
     } else {
       Text(verbatim: message.text)
     }
+  }
+}
+
+/// Argon speaks on a rule; he speaks in a box.
+///
+/// Argon's text sits against a single vertical construction line that runs a
+/// little past the paragraph at both ends. His own messages are outlined in
+/// blue with the corners overshooting. No filled bubbles: which voice is which
+/// is carried by the linework alone.
+private struct BubbleFrame: ViewModifier {
+  let fromArgon: Bool
+
+  func body(content: Content) -> some View {
+    if fromArgon {
+      content
+        .padding(.leading, 14).padding(.vertical, 4)
+        .overlay(alignment: .leading) { ArgonRule() }
+    } else {
+      content
+        .padding(.horizontal, 12).padding(.vertical, 9)
+        .background(Argon.accent.opacity(0.08))
+        .overlay(DraftFrame(overshoot: 6).stroke(Argon.accent.opacity(0.6), lineWidth: 1))
+        .padding(6)
+    }
+  }
+}
+
+/// The vertical line Argon's words sit against, overshooting both ends.
+struct ArgonRule: View {
+  var body: some View {
+    Rectangle().fill(Argon.lineStrong).frame(width: 1)
+      .padding(.vertical, -Argon.overshoot / 2)
   }
 }

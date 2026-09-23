@@ -42,7 +42,7 @@ struct ArgonSetupView: View {
         .padding(.bottom, 32)
       }
       .scrollContentBackground(.hidden)
-      .argonAmbience(ticking: false)
+      .argonAmbience()
       .navigationTitle("Set up Argon")
       .navigationBarTitleDisplayMode(.large)
       .toolbarBackground(.hidden, for: .navigationBar)

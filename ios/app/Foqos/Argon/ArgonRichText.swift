@@ -49,7 +49,7 @@ struct ArgonRichText: View {
           buttons(row)
 
         case .divider:
-          Rectangle().fill(Argon.hairlineBright).frame(height: 1).padding(.vertical, 3)
+          Rectangle().fill(Argon.hairline).frame(height: 1).padding(.vertical, 3)
         }
       }
     }
@@ -80,16 +80,10 @@ struct ArgonRichText: View {
       Button { onAction?(action) } label: {
         Text(action.label)
           .font(Argon.detail.weight(.semibold))
-          .foregroundStyle(live ? Color.white : Argon.Tone.faint)
-          .padding(.horizontal, 14).padding(.vertical, 7)
-          .background {
-            Capsule().fill(live
-              ? AnyShapeStyle(LinearGradient(colors: [Argon.accent, Argon.accentDeep],
-                                             startPoint: .top, endPoint: .bottom))
-              : AnyShapeStyle(Color.white.opacity(0.06)))
-          }
-          .overlay(Capsule().strokeBorder(live ? Argon.hairlineBright : Argon.hairline,
-                                          lineWidth: 1))
+          .foregroundStyle(live ? Argon.accent : Argon.Tone.faint)
+          .padding(.horizontal, 12).padding(.vertical, 6)
+          .background(Argon.Ink.raised,
+                      in: RoundedRectangle(cornerRadius: 8, style: .continuous))
           .fixedSize()
       }
       .buttonStyle(.plain)
