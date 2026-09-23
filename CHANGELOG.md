@@ -20,3 +20,8 @@
   syncs do not resurrect work the user marked done.
 - Moved date-only Classroom homework to the prior work evening while preserving
   exact local dates and times for assignments with explicit deadlines.
+- Math and Japanese now land on the evening before Classroom's date, as in v1.
+  Both collect in class but post every item at 23:59, so the date-only rule
+  above never reached them. Deadlines before 16:00 (08:30 corrections, AI's
+  00:01 exercises) also move to the evening before, and the model is told the
+  hand-in day rather than reading Wednesday's clock after Tuesday's date.

@@ -131,7 +131,7 @@ class Task:
         if self.subject:
             bits.append(f"({self.subject})")
         if self.due:
-            bits.append(f"due {_due_phrase(self.due)}{_at_phrase(self.due_at)}")
+            bits.append(f"due {_due_phrase(self.due)}{_at_phrase(self.due, self.due_at)}")
         if self.priority != "normal":
             bits.append(f"[{self.priority}]")
         return " ".join(bits)
@@ -714,12 +714,14 @@ def _due_phrase(due: str) -> str:
     return f"{day:%a} {day:%m-%d} ({when})"
 
 
-def _at_phrase(due_at: str | None) -> str:
-    """" 08:30" when the teacher set a time, empty when the date is all there is.
+def _at_phrase(due: str, due_at: str | None) -> str:
+    """When it is handed in, if that is not the evening the board shows.
 
-    A morning deadline is the previous evening's work and a bare date is not.
-    Without the clock the board cannot tell him which one he is looking at,
-    which is the whole reason 09-22 read as a day later than it was.
+    A Classroom task's date is the evening he works on it (see
+    ``google.classroom_task_date``), so Math collected Wednesday sits on
+    Tuesday. Printing Wednesday's clock after Tuesday's date would read as
+    "due Tuesday 08:30"; name the hand-in day instead. On its own day a clock
+    is still news unless it is the 23:59 default.
     """
     if not due_at:
         return ""
@@ -727,7 +729,10 @@ def _at_phrase(due_at: str | None) -> str:
         at = datetime.fromisoformat(due_at)
     except (TypeError, ValueError):
         return ""
-    return "" if (at.hour, at.minute) == (23, 59) else f" {at:%H:%M}"
+    clock_ = "" if (at.hour, at.minute) == (23, 59) else f" {at:%H:%M}"
+    if at.strftime("%Y-%m-%d") != due[:10]:
+        return f", handed in {at:%a}{clock_}"
+    return clock_
 
 
 def _task(row: sqlite3.Row) -> Task:
@@ -821,6 +826,11 @@ def _selftest() -> None:
                            due="2026-09-22",
                            due_at="2026-09-22T23:59:00-07:00")
         assert "23:59" not in s.task(plain.id).line(), "end of day is not news"
+        # Math on the evening before it is collected: the board date is
+        # Tuesday, and the line must not pair it with Wednesday's hand-in.
+        math = s.add_task("HW 23", source="classroom", external_id="cw-hw23",
+                          due="2026-09-22", due_at="2026-09-23T23:59:00-07:00")
+        assert s.task(math.id).line().endswith(", handed in Wed"), s.task(math.id).line()
         assert "task_reopened" in [e.kind for e in t.window(2)]
 
         assert s.complete_task(a.id).done is True

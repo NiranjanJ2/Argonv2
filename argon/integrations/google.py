@@ -436,7 +436,7 @@ def outstanding_assignments(account: str, days_back: int = DAYS_BACK,
         for cw in work:
             if cw.get("id") not in owed:
                 continue
-            _, due = _due_key(cw)
+            _, due = _due_key(cw, name)
             if REQUIRE_DUE_DATE and not due:
                 continue
             if not (floor <= due <= ceiling):
@@ -617,17 +617,35 @@ def classroom_due(coursework: dict[str, Any]) -> datetime | None:
         return None
 
 
-def classroom_task_date(coursework: dict[str, Any]) -> str:
-    """The day homework belongs on the board.
+#: Classes that take the work in class on the date Classroom shows, whatever
+#: time Classroom attaches. Math and Japanese post "11:59 PM" but collect at the
+#: start of the lesson, so the work is the night before. His list, carried from
+#: v1's CLASS_DUE_OFFSETS_DAYS; matched as a substring of the course name.
+#:
+#: The 09-22 rewrite keyed this on deadline *shape* instead (date-only means the
+#: night before). His Math and Japanese work is never date-only — every item
+#: comes back at 23:59 — so the rule never fired for the two classes it was for.
+COLLECTED_IN_CLASS = ("math analysis", "japanese")
 
-    A Classroom date without a time means it should be finished the night
-    before. Timed deadlines retain their exact local instant; midnight UTC
-    deadlines already convert to the preceding Pacific date.
+#: A deadline before this hour is met by working the evening before: 08:30 test
+#: corrections, AI's 00:01 exercises. School is out by 15:36 on a regular day.
+WORK_NIGHT_CUTOFF_HOUR = 16
+
+
+def classroom_task_date(coursework: dict[str, Any], course: str = "") -> str:
+    """The evening he works on it, which is the date the board shows.
+
+    The night before the deadline when the work is collected in class, when
+    the deadline falls before the end of school, or when Classroom gives only
+    a date. Otherwise the deadline's own local date: a 23:59 Physics upload is
+    that evening's work.
     """
     due = classroom_due(coursework)
     if due is None:
         return ""
-    if coursework.get("dueTime") is None:
+    in_class = any(c in course.lower() for c in COLLECTED_IN_CLASS)
+    if (in_class or coursework.get("dueTime") is None
+            or due.hour < WORK_NIGHT_CUTOFF_HOUR):
         due -= timedelta(days=1)
     return due.strftime("%Y-%m-%d")
 
@@ -646,9 +664,9 @@ def due_precision(coursework: dict[str, Any]) -> str:
     return "instant" if coursework.get("dueTime") is not None else "work_by_day"
 
 
-def _due_key(work: dict[str, Any]) -> tuple:
+def _due_key(work: dict[str, Any], course: str = "") -> tuple:
     """Sort by local due date, undated last — the order he reads them in."""
-    due = classroom_task_date(work)
+    due = classroom_task_date(work, course)
     return (1, "") if not due else (0, due)
 
 
@@ -719,8 +737,24 @@ def _selftest() -> None:
         assert classroom_due(undated).strftime("%Y-%m-%d %H:%M") == "2026-09-20 23:59"
         assert classroom_task_date(undated) == "2026-09-19", \
             "date-only homework belongs on the previous evening's board"
-        assert classroom_task_date(review) == "2026-09-18", \
-            "a timed deadline retains its exact local date"
+        assert classroom_task_date(review) == "2026-09-17", \
+            "an 08:30 deadline is the previous evening's work"
+
+        # His real board on 09-22. Every item here is timed 23:59 Pacific
+        # (06:59Z the next day), so only the course decides the evening.
+        def eleven59(day: int) -> dict[str, Any]:
+            return {"dueDate": {"year": 2026, "month": 9, "day": day + 1},
+                    "dueTime": {"hours": 6, "minutes": 59}}
+        assert classroom_task_date(eleven59(23), "Math Analysis/Calc A") == "2026-09-22", \
+            "HW 23 is collected in Wednesday's lesson, so it is Tuesday night's work"
+        assert classroom_task_date(eleven59(24), "Japanese 4 & AP") == "2026-09-23", \
+            "Japanese collects in class too"
+        assert classroom_task_date(eleven59(24), "Physics") == "2026-09-24", \
+            "a 23:59 upload is that evening's work"
+        ai = {"dueDate": {"year": 2026, "month": 9, "day": 23},
+              "dueTime": {"hours": 7, "minutes": 1}}
+        assert classroom_task_date(ai, "Artif Intell") == "2026-09-22", \
+            "00:01 Wednesday means done by Tuesday night"
         assert classroom_due({}) is None
 
         # v1's distinction, which this rewrite had flattened: a deadline with a
