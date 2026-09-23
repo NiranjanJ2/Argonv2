@@ -37,7 +37,6 @@ MESSAGE_LIMIT = 50
 #: usually over the model's context limit, so every call 400s until it ages out.
 MAX_MESSAGE_CHARS = 8_000
 MAX_TITLE_CHARS = 500
-MAX_PLANNER_ITEMS = 100
 
 
 def create_app(rt) -> Flask:
@@ -296,32 +295,59 @@ def create_app(rt) -> Flask:
         rows = [e.payload for e in rt.transcript.window(2) if e.kind == "diagnostics"]
         return jsonify({"entries": rows})
 
+    # -- the afternoon planner ------------------------------------------
+    #: AP Lang's posts, read at most every few minutes. The sheet is fetched on
+    #: every foreground while it is due, and one Classroom read is a courses
+    #: list plus two calls per course — seconds, not milliseconds.
+    lang_cache: dict[str, Any] = {"at": None, "posts": []}
+
+    def lang_posts() -> list[dict[str, Any]]:
+        now = clock.now()
+        if lang_cache["at"] and (now - lang_cache["at"]).total_seconds() < 600:
+            return lang_cache["posts"]
+        from argon.integrations import google
+
+        account = google.account_for("classroom", rt.cfg.google_accounts)
+        try:
+            posts = google.recent_materials(account, days_back=1, limit=50) \
+                if account else []
+        except Exception as e:  # noqa: BLE001 - a planner without Lang still plans
+            log.warning("planner could not read AP Lang: %s", e)
+            rt.transcript.append("materials_failed", summary=f"planner: {type(e).__name__}")
+            posts = []
+        lang_cache.update(at=now, posts=posts)
+        return posts
+
     @app.get("/v1/planner")
     @require_token
     def v1_planner_get():
-        return jsonify({"tasks": [task_json(t) for t in rt.store.tasks()],
-                        "start_at": None, "last_planned": None})
+        """What the afternoon sheet shows. v1's shape, plus `classroom` per
+        item so the app can offer "not doing" instead of "do today"."""
+        from argon import planner
+
+        return jsonify(planner.build(rt.store, lang_posts()))
 
     @app.post("/v1/planner")
     @require_token
     def v1_planner_post():
-        items = body().get("tasks")
-        if not isinstance(items, list):
-            return jsonify({"error": "tasks must be a list"}), 400
-        if len(items) > MAX_PLANNER_ITEMS:
+        """Apply the sheet and mark today planned — see planner.apply.
+
+        Idempotent on the outbox's key: a retried submission must not add AP
+        Chem twice.
+        """
+        from argon import planner
+
+        if cached := replay():
+            return cached
+        data = body()
+        if planner.too_large(data):
             # One 1 MB request created 5,023 tasks and as many transcript rows,
             # every one of which then entered the model's context.
-            return jsonify({"error": f"at most {MAX_PLANNER_ITEMS} tasks"}), 413
-        added = []
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            title = text_field(item, "title")
-            if title:
-                added.append(rt.store.add_task(title[:MAX_TITLE_CHARS],
-                                               due=text_field(item, "due"),
-                                               source="planner"))
-        return jsonify({"added": [task_json(t) for t in added]})
+            return jsonify({"error": f"at most {planner.MAX_ITEMS} per list"}), 413
+        for key in ("done", "ignore", "today", "carry", "focus", "add"):
+            if key in data and not isinstance(data[key], list):
+                return jsonify({"error": f"{key} must be a list"}), 400
+        return remember(planner.apply(rt, data), 200)
 
     @app.route("/v2/ac", methods=["GET", "POST"])
     @require_token
@@ -419,6 +445,8 @@ def create_app(rt) -> Flask:
     @require_token
     def v2_state():
         """Everything a client needs in one call. /v1 needed four."""
+        from argon import planner
+
         return jsonify({
             "now": clock.now().isoformat(),
             "school": {"schedule": bell.describe(), "period": bell.current_period()},
@@ -430,6 +458,12 @@ def create_app(rt) -> Flask:
                        "cached_fraction": budget.cached_fraction()},
             "lock": lock_json(),
             "brief": rt.brief_card(),
+            # Cheap: no Classroom read. The app fetches /v1/planner only when
+            # `planner.due` says there is a sheet to show.
+            "planner": planner.status(rt.store),
+            # The phone arms tonight's block from this itself, so it survives
+            # a closed app, a dead server and a dropped push.
+            "routine": planner.routine(rt.store),
         })
 
     @app.post("/v2/log")
@@ -646,8 +680,8 @@ def _selftest() -> None:
         assert c.post("/v1/ios/override", json={"minutes": 99999},
                       headers=auth).status_code == 400
         assert c.post("/v1/tasks", json={"title": 123}, headers=auth).status_code == 400
-        assert c.post("/v1/planner", json={"tasks": "oops"}, headers=auth).status_code == 400
-        assert c.post("/v1/planner", json={"tasks": [1, None]},
+        assert c.post("/v1/planner", json={"done": "oops"}, headers=auth).status_code == 400
+        assert c.post("/v1/planner", json={"add": [1, None]},
                       headers=auth).get_json()["added"] == []
         assert c.post("/v2/say", json={"text": 42}, headers=auth).status_code == 400
         assert c.post("/v1/chat", json=["not", "a", "dict"], headers=auth).status_code == 400
@@ -674,8 +708,31 @@ def _selftest() -> None:
         assert c.post("/v1/ac/xx", json={"mac": "y"}, headers=auth).status_code == 400
         assert c.post("/v1/ios/override", json={"minutes": 1e999},
                       headers=auth).status_code == 400
-        assert c.post("/v1/planner", json={"tasks": [{"title": "x"}] * 500},
+        assert c.post("/v1/planner", json={"add": [{"title": "x"}] * 500},
                       headers=auth).status_code == 413
+
+        # The planner. Monday 18:00, the day already planned above by the
+        # bad-input probes, so reset it and walk the real flow.
+        rt.store.put_setting("planner", {})
+        state = c.get("/v2/state", headers=auth).get_json()
+        assert state["planner"]["due"] is True, state["planner"]
+        assert state["routine"]["start_at"] == "18:00" and not state["routine"]["chosen"]
+        sheet = c.get("/v1/planner", headers=auth).get_json()
+        for key in ("needed", "overdue", "today", "long_term", "suggestions",
+                    "start_at", "warning_minutes", "opens_after"):
+            assert key in sheet, key
+        assert sheet["needed"] is True
+        assert any(x["kind"] == "chem" and x["default"] is False
+                   for x in sheet["suggestions"])
+        plan = {**auth, "Idempotency-Key": "plan-once"}
+        for _ in range(2):      # an outbox retry must not add Chem twice
+            r = c.post("/v1/planner", json={"chem": True, "start_at": "19:15"},
+                       headers=plan)
+            assert r.status_code == 200, r.get_json()
+        assert sum(x.title == "AP Chem homework" for x in rt.store.tasks()) == 1
+        state = c.get("/v2/state", headers=auth).get_json()
+        assert state["planner"]["due"] is False, "submitting closes it for the day"
+        assert state["routine"]["start_at"] == "19:15" and state["routine"]["chosen"]
 
         # Unauthenticated routing errors must not reach the transcript: the
         # handler runs before auth, and the transcript is the model's context.
