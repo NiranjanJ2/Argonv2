@@ -12,6 +12,7 @@ struct ArgonChatView: View {
           LazyVStack(alignment: .leading, spacing: 12) {
             if store.messages.isEmpty { empty }
             ForEach(store.messages) { ArgonBubble(message: $0).id($0.id) }
+            if store.awaitingReply { ArgonTyping().id("typing") }
           }
           .padding(.horizontal, 18).padding(.vertical, 14)
         }
@@ -24,6 +25,7 @@ struct ArgonChatView: View {
         // Without this the topmost bubble rides up under the status bar.
         .safeAreaPadding(.top, 8)
         .onChange(of: store.messages.count) { _, _ in scroll(proxy) }
+        .onChange(of: store.awaitingReply) { _, _ in scroll(proxy) }
         .onAppear { scroll(proxy, animated: false) }
       }
 
@@ -69,7 +71,7 @@ struct ArgonChatView: View {
         .argonGlow(strength: 0.8)
       Text(store.connection.isLive ? "Nothing yet." : "No cached conversation.")
         .font(Argon.body).foregroundStyle(Argon.Tone.secondary)
-      Text("Ask him what's due.").font(Argon.detail).foregroundStyle(Argon.Tone.faint)
+      Text("Ask what's due tonight.").font(Argon.detail).foregroundStyle(Argon.Tone.faint)
     }
     .frame(maxWidth: .infinity).padding(.top, 70)
   }
@@ -121,9 +123,34 @@ struct ArgonChatView: View {
   }
 
   private func scroll(_ proxy: ScrollViewProxy, animated: Bool = true) {
-    guard let last = store.messages.last?.id else { return }
+    guard let last = store.awaitingReply ? "typing" : store.messages.last?.id else { return }
     if animated { withAnimation { proxy.scrollTo(last, anchor: .bottom) } }
     else { proxy.scrollTo(last, anchor: .bottom) }
+  }
+}
+
+/// Argon is working on an answer. v1 had this; v2 went straight from
+/// "sending…" to nothing for up to a minute.
+struct ArgonTyping: View {
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+  var body: some View {
+    TimelineView(.animation(paused: reduceMotion)) { context in
+      let t = context.date.timeIntervalSinceReferenceDate * 4
+      HStack(spacing: 5) {
+        ForEach(0..<3, id: \.self) { i in
+          Circle()
+            .fill(Argon.Tone.secondary)
+            .frame(width: 7, height: 7)
+            .opacity(reduceMotion ? 0.7 : 0.35 + 0.65 * max(0, sin(t - Double(i) * 0.9)))
+        }
+      }
+    }
+    .padding(.horizontal, 16).padding(.vertical, 14)
+    .background(RoundedRectangle(cornerRadius: 20, style: .continuous)
+      .fill(.ultraThinMaterial))
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .accessibilityLabel("Argon is replying")
   }
 }
 

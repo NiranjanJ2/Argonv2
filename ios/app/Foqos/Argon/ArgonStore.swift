@@ -29,6 +29,10 @@ final class ArgonStore {
   private(set) var isLoading = false
   private(set) var lastRefresh: Date?
   private(set) var failure: String?
+  /// He sent something and Argon has not answered yet. Drives the typing
+  /// dots: without them the chat sat blank after "sending…", and the
+  /// transcript shows him sending the same question twice, two minutes apart.
+  private(set) var awaitingReply = false
 
   /// Honest about where the numbers came from.
   enum Connection: Equatable {
@@ -201,6 +205,8 @@ final class ArgonStore {
   /// day for a message he sends twice. If the reply misses the window it still
   /// arrives on the next refresh — the transcript is the truth, not this loop.
   private func awaitReply(past count: Int) async {
+    awaitingReply = true
+    defer { awaitingReply = false }
     let deadline = Date().addingTimeInterval(replyWindow)
     while Date() < deadline {
       try? await Task.sleep(for: .milliseconds(1200))
@@ -209,8 +215,9 @@ final class ArgonStore {
     }
   }
 
-  /// 45s: past a slow turn with tool calls, short of waiting on a dead server.
-  private let replyWindow: TimeInterval = 45
+  /// 120s. A turn with eight tool steps runs past 45s, and a reply that
+  /// missed the window never appeared until he left the tab and came back.
+  private let replyWindow: TimeInterval = 120
 
   /// Messages without the full state read — this runs up to 35 times per send.
   private func refreshMessagesOnly() async {
