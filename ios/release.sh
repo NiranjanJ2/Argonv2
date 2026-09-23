@@ -1,16 +1,54 @@
 #!/usr/bin/env bash
-# Archive Argon for TestFlight.
+# Archive Argon and upload it to TestFlight.
 #
 # Archiving signs with the Apple *Development* identity — that is what build 22
-# used and what shipped. Xcode re-signs for distribution at export time, which
-# is why a distribution certificate is not needed until you press Distribute.
+# used and what shipped. Distribution signing happens at export, in the cloud,
+# through the App Store Connect API key, so no distribution certificate is
+# needed on this Mac.
 #
-#   ./release.sh            bump the build number and archive
-#   ./release.sh --no-bump  archive at the current build number
+#   ./release.sh                 bump the build number, archive, upload
+#   ./release.sh --no-bump       archive at the current build number, upload
+#   ./release.sh --upload PATH   upload an archive that already exists
 #
-# Then: Xcode → Window → Organizer → Archives → Distribute App → TestFlight.
+# Without the key file it stops after archiving; then Xcode → Window →
+# Organizer → Archives → Distribute App → TestFlight does the same by hand.
 set -euo pipefail
 cd "$(dirname "$0")/app"
+
+# Not secrets — the .p8 is, and it never leaves ~/.appstoreconnect.
+ASC_KEY_ID=6H2KYZJK9C
+ASC_ISSUER=d067d6f1-4488-4ea2-912a-cc44d1dce353
+ASC_KEY="$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+
+upload() {
+  local archive="$1"
+  [ -f "$ASC_KEY" ] || { echo "no API key at $ASC_KEY — distribute from Organizer"; return 1; }
+  local opts out
+  opts=$(mktemp -t argon-export).plist
+  out=$(mktemp -d -t argon-export)
+  cat > "$opts" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>method</key><string>app-store-connect</string>
+  <key>destination</key><string>upload</string>
+  <key>teamID</key><string>DX3U2FC8X5</string>
+  <key>signingStyle</key><string>automatic</string>
+  <key>manageAppVersionAndBuildNumber</key><false/>
+</dict></plist>
+PLIST
+  echo "uploading $(basename "$archive")…"
+  xcodebuild -exportArchive -archivePath "$archive" -exportOptionsPlist "$opts" \
+    -exportPath "$out" -allowProvisioningUpdates \
+    -authenticationKeyPath "$ASC_KEY" -authenticationKeyID "$ASC_KEY_ID" \
+    -authenticationKeyIssuerID "$ASC_ISSUER" 2>&1 \
+    | grep -E 'error:|Upload|EXPORT|Progress' || true
+}
+
+if [ "${1:-}" = "--upload" ]; then
+  upload "${2:?archive path}"
+  exit
+fi
 
 PROJ=foqos.xcodeproj/project.pbxproj
 
@@ -46,4 +84,4 @@ icons=$(xcrun --sdk iphoneos assetutil --info "$app/Assets.car" 2>/dev/null \
         | python3 -c "import json,sys;d=json.load(sys.stdin);print(', '.join(sorted({e.get('Name','') for e in d if isinstance(e,dict) and 'argon-icon' in str(e.get('Name',''))})))" 2>/dev/null)
 echo "icon    : ${icons:-NOT FOUND}"
 echo
-echo "next: Xcode → Window → Organizer → Archives → Distribute App → TestFlight"
+upload "$path"
