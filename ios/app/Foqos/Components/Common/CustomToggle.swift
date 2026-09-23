@@ -13,7 +13,7 @@ struct CustomToggle: View {
     VStack(alignment: .leading, spacing: 0) {
       Toggle(title, isOn: $isOn)
         .disabled(isDisabled)
-        .tint(themeManager.themeColor)
+        .tint(Argon.accent)
 
       Text(description)
         .font(.caption)
@@ -26,7 +26,7 @@ struct CustomToggle: View {
       if isDisabled && errorMessage != nil {
         Text(errorMessage!)
           .font(.caption)
-          .foregroundColor(.red)
+          .foregroundStyle(Argon.overdue)
       }
     }
   }

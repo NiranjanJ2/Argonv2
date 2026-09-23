@@ -44,12 +44,11 @@ struct HomeProfilesListView: View {
           )
 
           if index < profiles.count - 1 {
-            Divider()
-              .padding(.leading, 64)
+            ArgonDivider()
           }
         }
       }
-      .argonGlassPanel(cornerRadius: 24)
+      .argonGlassPanel()
     }
   }
 }
@@ -118,7 +117,9 @@ private struct HomeProfileRow: View {
 
       actionMenu
     }
-    .padding(16)
+    .padding(.vertical, 14)
+    .padding(.leading, 14)
+    .padding(.trailing, 6)
   }
 
   private var actionMenu: some View {
@@ -146,7 +147,7 @@ private struct HomeProfileRow: View {
     } label: {
       Image(systemName: "ellipsis")
         .font(.system(size: 16, weight: .semibold))
-        .foregroundStyle(ArgonPalette.iceBlue.opacity(0.82))
+        .foregroundStyle(Argon.Tone.secondary)
         .frame(width: 32, height: 44)
         .contentShape(Rectangle())
     }

@@ -1,5 +1,8 @@
 import SwiftUI
 
+/// Things that stop blocking from working. Red as the sheet allows it: soft
+/// red words on a faint red wash inside a red construction line, one row per
+/// alert. They were 148pt solid red tiles in a sideways scroll.
 struct HomeAlertsView: View {
   let alerts: [HomeAlert]
   let onAlertTapped: (HomeAlert) -> Void
@@ -8,17 +11,17 @@ struct HomeAlertsView: View {
     if !alerts.isEmpty {
       VStack(alignment: .leading, spacing: 10) {
         SectionTitle("Alerts")
+          .padding(.horizontal, Argon.overshoot)
 
-        ScrollView(.horizontal, showsIndicators: false) {
-          HStack(spacing: 12) {
-            ForEach(alerts) { alert in
-              Button {
-                onAlertTapped(alert)
-              } label: {
-                HomeAlertCard(alert: alert)
-              }
-              .buttonStyle(.plain)
+        VStack(spacing: Argon.overshoot * 2) {
+          ForEach(alerts) { alert in
+            Button {
+              onAlertTapped(alert)
+            } label: {
+              HomeAlertCard(alert: alert)
             }
+            .buttonStyle(.plain)
+            .padding(Argon.overshoot)
           }
         }
       }
@@ -30,33 +33,32 @@ private struct HomeAlertCard: View {
   let alert: HomeAlert
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 0) {
-      HStack {
-        Image(systemName: alert.iconName)
-          .font(.system(size: 30, weight: .semibold))
-          .foregroundStyle(.white)
-          .frame(width: 38, height: 38, alignment: .leading)
+    HStack(spacing: 12) {
+      Image(systemName: alert.iconName)
+        .font(.body.weight(.semibold))
+        .frame(width: 22)
 
-        Spacer(minLength: 0)
-      }
-
-      Spacer(minLength: 8)
-
-      VStack(alignment: .leading, spacing: 4) {
+      VStack(alignment: .leading, spacing: 2) {
         Text(alert.title)
-          .font(.headline)
-          .fontWeight(.bold)
-          .foregroundStyle(.white)
+          .font(Argon.body.weight(.semibold))
           .lineLimit(2)
-          .minimumScaleFactor(0.82)
+        Text(alert.message)
+          .font(Argon.label)
+          .foregroundStyle(Argon.overdue.opacity(0.8))
+          .lineLimit(2)
+          .fixedSize(horizontal: false, vertical: true)
       }
+      .frame(maxWidth: .infinity, alignment: .leading)
+
+      Image(systemName: "chevron.right")
+        .font(.caption.weight(.semibold))
     }
-    .padding(18)
-    .frame(width: 148, height: 148, alignment: .leading)
-    .background(
-      Color.red.opacity(0.8),
-      in: RoundedRectangle(cornerRadius: 28, style: .continuous)
-    )
+    .padding(.horizontal, 14)
+    .padding(.vertical, 12)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .draftAlarm()
+    .contentShape(Rectangle())
+    .accessibilityElement(children: .combine)
     .accessibilityLabel(alert.title)
     .accessibilityHint(alert.message)
   }
@@ -78,19 +80,23 @@ struct HomeAlertDetailView: View {
         Spacer(minLength: 10)
 
         Image(systemName: alert.iconName)
-          .font(.system(size: 50, weight: .semibold))
-          .foregroundStyle(.red)
-          .frame(width: 104, height: 104)
+          .font(.system(size: 34, weight: .medium))
+          .foregroundStyle(Argon.overdue)
+          .frame(width: 80, height: 80)
+          .draftAlarm()
+          .padding(Argon.overshoot)
 
         VStack(spacing: 10) {
           Text(alert.title)
-            .font(.title2.weight(.bold))
-            .foregroundStyle(.primary)
+            .font(.title2.weight(.semibold).width(.expanded))
+            .foregroundStyle(Argon.Tone.primary)
             .multilineTextAlignment(.center)
+            // Expanded width runs long; wrap rather than truncate.
+            .fixedSize(horizontal: false, vertical: true)
 
           Text(alert.detailMessage)
-            .font(.body)
-            .foregroundStyle(.secondary)
+            .font(Argon.body)
+            .foregroundStyle(Argon.Tone.secondary)
             .multilineTextAlignment(.center)
             .fixedSize(horizontal: false, vertical: true)
         }
@@ -98,14 +104,12 @@ struct HomeAlertDetailView: View {
 
         if let disabledReason {
           Text(disabledReason)
-            .font(.footnote)
-            .foregroundStyle(.secondary)
+            .font(Argon.label)
+            .foregroundStyle(Argon.Tone.secondary)
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-              Color(.secondarySystemBackground),
-              in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-            )
+            .draftBox()
+            .padding(.horizontal, Argon.overshoot)
         }
 
         Spacer(minLength: 12)
@@ -118,6 +122,7 @@ struct HomeAlertDetailView: View {
         )
       }
       .padding()
+      .argonAmbience()
       .navigationTitle("Details")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {

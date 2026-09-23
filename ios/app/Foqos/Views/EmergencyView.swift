@@ -18,8 +18,10 @@ struct EmergencyView: View {
 
         statusCard
       }
-      .padding()
+      .padding(.horizontal, Argon.margin)
+      .padding(.vertical)
     }
+    .argonAmbience()
     .onAppear {
       strategyManager.checkAndResetEmergencyUnblocks()
     }
@@ -28,8 +30,9 @@ struct EmergencyView: View {
   private var header: some View {
     VStack(alignment: .leading, spacing: 12) {
       HStack {
-        Text("Emergency Access")
-          .font(.title2).bold()
+        Text("Emergency access")
+          .font(.title2.weight(.semibold).width(.expanded))
+          .foregroundStyle(Argon.Tone.primary)
 
         Spacer()
 
@@ -37,7 +40,7 @@ struct EmergencyView: View {
           HStack(spacing: 6) {
             Image(systemName: "clock.arrow.circlepath")
               .font(.caption)
-              .foregroundColor(.secondary)
+              .foregroundStyle(Argon.Tone.faint)
 
             Group {
               if let nextResetDate = strategyManager.getNextResetDate() {
@@ -98,11 +101,11 @@ struct EmergencyView: View {
               }
             }
           } label: {
-            Image(systemName: "gearshape.fill")
-              .font(.caption)
-              .foregroundColor(.secondary)
-              .padding(8)
-              .background(Circle().fill(Color.secondary.opacity(0.1)))
+            Image(systemName: "gearshape")
+              .font(.footnote)
+              .foregroundStyle(Argon.accent)
+              .frame(width: 32, height: 32)
+              .draftBox(overshoot: 4)
           }
         }
       }
@@ -110,8 +113,8 @@ struct EmergencyView: View {
       Text(
         "Tap the glass to reveal the emergency unblock button. Use only when absolutely necessary."
       )
-      .font(.callout)
-      .foregroundColor(.secondary)
+      .font(Argon.detail)
+      .foregroundStyle(Argon.Tone.secondary)
     }
     .padding(.top, 16)
     .frame(maxWidth: .infinity, alignment: .leading)
@@ -122,51 +125,49 @@ struct EmergencyView: View {
       HStack(spacing: 12) {
         Image(systemName: hasRemaining ? "shield.lefthalf.filled" : "shield.slash")
           .font(.title3)
-          .foregroundColor(hasRemaining ? .green : .red)
+          .foregroundStyle(hasRemaining ? Argon.accent : Argon.overdue)
         VStack(alignment: .leading, spacing: 4) {
           Text("Unblocks remaining")
-            .font(.subheadline)
-            .foregroundColor(.secondary)
+            .font(Argon.caption)
+            .foregroundStyle(Argon.Tone.secondary)
           Text("\(emergencyUnblocksRemaining)")
-            .font(.title2).bold()
-            .foregroundColor(hasRemaining ? .primary : .red)
+            .font(.title2.weight(.semibold).monospacedDigit())
+            .foregroundStyle(hasRemaining ? Argon.Tone.primary : Argon.overdue)
         }
         Spacer()
       }
 
       Text("You have a limited number of emergency unblocks.")
-        .font(.footnote)
-        .foregroundColor(.secondary)
+        .font(Argon.label)
+        .foregroundStyle(Argon.Tone.secondary)
 
       BreakGlassButton(tapsToShatter: 3) {
         ActionButton(
           title: "Emergency Unblock",
-          backgroundColor: .red,
-          iconName: "exclamationmark.triangle.fill",
-          iconColor: .white,
+          backgroundColor: Argon.overdue,
+          iconName: "exclamationmark.triangle",
           isLoading: isPerformingEmergencyUnblock,
           isDisabled: !hasRemaining
         ) {
           performEmergencyUnblock()
         }
       }
-      .frame(height: 56)
+      .frame(height: 62)
 
       if !hasRemaining {
         Text("No emergency unblocks remaining. You're out of luck.")
-          .font(.footnote)
-          .foregroundColor(.red)
+          .font(Argon.label)
+          .foregroundStyle(Argon.overdue)
+          .padding(.horizontal, 8).padding(.vertical, 6)
+          .background(Argon.overdue.opacity(0.10))
       } else {
         Text("This will reduce your remaining count by 1.")
-          .font(.footnote)
-          .foregroundColor(.secondary)
+          .font(Argon.label)
+          .foregroundStyle(Argon.Tone.faint)
       }
     }
     .padding(16)
-    .background(
-      RoundedRectangle(cornerRadius: 16, style: .continuous)
-        .fill(.thinMaterial)
-    )
+    .draftBox()
   }
 
   private func performEmergencyUnblock() {

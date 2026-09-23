@@ -125,29 +125,27 @@ struct ProfileSummaryContent: View {
   private var titleFont: Font {
     switch layout {
     case .dashboard:
-      return .system(size: 17, weight: .semibold, design: .serif)
+      return Argon.body.weight(.semibold)
     case .compact:
-      return .system(size: 15, weight: .semibold, design: .serif)
+      return Argon.detail.weight(.semibold)
     }
   }
 
   var body: some View {
     HStack(spacing: layout == .dashboard ? 12 : 10) {
-      BlockingStrategyIconImage(strategy: blockingStrategy)
+      BlockingStrategySymbol(strategy: blockingStrategy)
         .font(.system(size: iconFontSize, weight: .semibold))
-        .foregroundStyle(ArgonPalette.iceBlue)
+        .foregroundStyle(Argon.accent)
         .frame(width: iconSize, height: iconSize)
-        .background(
-          themeManager.themeColor.opacity(0.14),
-          in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-        )
+        // A square cell, outlined, as a symbol sits in a title block.
+        .overlay(Rectangle().strokeBorder(Argon.line, lineWidth: 1))
 
       VStack(alignment: .leading, spacing: contentSpacing) {
         HStack(spacing: 7) {
           Text(profile.name)
             .font(titleFont)
             .fontWeight(.semibold)
-            .foregroundStyle(ArgonPalette.ink)
+            .foregroundStyle(Argon.Tone.primary)
             .lineLimit(1)
 
           if showsActiveChip {
@@ -169,13 +167,7 @@ struct ProfileSummaryContent: View {
   }
 
   private var activeChip: some View {
-    Text("Active")
-      .font(.caption2)
-      .fontWeight(.bold)
-      .foregroundStyle(.primary)
-      .padding(.horizontal, 7)
-      .padding(.vertical, 4)
-      .background(themeManager.themeColor.opacity(0.18), in: Capsule())
+    ArgonPill(text: "Active", colour: Argon.accent, tinted: true)
   }
 
   private var showsActiveChip: Bool {
@@ -230,8 +222,8 @@ struct ProfileUsageMiniBarChart: View {
         ForEach(Array(values.enumerated()), id: \.offset) { _, value in
           let normalizedValue = CGFloat(value / maxValue)
 
-          RoundedRectangle(cornerRadius: 2, style: .continuous)
-            .fill(themeManager.themeColor)
+          Rectangle()
+            .fill(Argon.accent)
             .opacity(value > 0 ? 0.36 + (normalizedValue * 0.64) : 0.14)
             .frame(maxWidth: .infinity)
             .frame(height: value > 0 ? max(5, normalizedValue * 25) : 3)
@@ -243,7 +235,7 @@ struct ProfileUsageMiniBarChart: View {
         ForEach(Array(dayLabels.enumerated()), id: \.offset) { _, label in
           Text(label)
             .font(.system(size: 6, weight: .semibold))
-            .foregroundStyle(.secondary.opacity(0.7))
+            .foregroundStyle(Argon.Tone.faint)
             .frame(maxWidth: .infinity)
         }
       }
@@ -283,9 +275,8 @@ private struct ProfileSummaryMetadataLine: View {
 
   var body: some View {
     Text(metadataText)
-      .font(.caption)
-      .fontWeight(.medium)
-      .foregroundStyle(.secondary)
+      .font(Argon.label.monospacedDigit())
+      .foregroundStyle(Argon.Tone.secondary)
       .lineLimit(1)
   }
 
@@ -321,7 +312,7 @@ private struct ProfileSummaryNextScheduleLine: View {
         .font(.caption2)
         .lineLimit(1)
         .minimumScaleFactor(0.82)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(Argon.Tone.secondary)
     }
   }
 }
@@ -356,13 +347,13 @@ private struct ProfileSummaryCompactIndicators: View {
       HStack(spacing: 12) {
         ForEach(Array(indicators.prefix(3)), id: \.self) { label in
           HStack(spacing: 5) {
-            Circle()
-              .fill(Color.primary.opacity(0.85))
-              .frame(width: 5, height: 5)
+            Rectangle()
+              .fill(Argon.Tone.faint)
+              .frame(width: 4, height: 4)
 
             Text(label)
               .font(.caption2)
-              .foregroundColor(.secondary)
+              .foregroundStyle(Argon.Tone.secondary)
               .lineLimit(1)
           }
         }

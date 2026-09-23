@@ -11,14 +11,8 @@ struct HomeProfileLauncher: View {
   let onStartTapped: () -> Void
   var onActiveTapped: () -> Void = {}
 
-  private let inactiveButtonHeight: CGFloat = 64
-  private let activeButtonHeight: CGFloat = 88
-  private let activeButtonCornerRadius: CGFloat = 24
-  private let activeButtonBlobScale: CGFloat = 2.6
-  private let activeButtonBlobCount = 9
-  private let activeButtonBlobSizeRange: ClosedRange<CGFloat> = 0.18...0.34
-  private let activeButtonBlobWidthRange: ClosedRange<CGFloat> = 1.45...2.65
-  private let activeButtonBlobHeightRange: ClosedRange<CGFloat> = 0.65...1.15
+  private let inactiveButtonHeight: CGFloat = 56
+  private let activeButtonHeight: CGFloat = 80
 
   var body: some View {
     Group {
@@ -28,8 +22,15 @@ struct HomeProfileLauncher: View {
         inactiveLauncherButtons
       }
     }
-    .padding(.horizontal, 16)
-    .padding(.top, 8)
+    // The box's lines sit on the same margin as every box above it; the
+    // overshoot lives in the gap.
+    .padding(.horizontal, Argon.margin)
+    .padding(.top, 10)
+    .padding(.bottom, 8)
+    // Its own ground, so list content scrolling underneath does not show
+    // through the gap between the launcher and the tab bar.
+    .background(Argon.Ink.base)
+    .overlay(alignment: .top) { ArgonDivider() }
   }
 
   private var inactiveLauncherButtons: some View {
@@ -53,14 +54,14 @@ struct HomeProfileLauncher: View {
       ) {
         activeAccessory
       }
-      .padding(.horizontal, 20)
+      .padding(.horizontal, 16)
       .frame(maxWidth: .infinity)
       .frame(height: activeButtonHeight)
-      .background(activeButtonBackground)
-      .contentShape(RoundedRectangle(cornerRadius: activeButtonCornerRadius, style: .continuous))
+      .background(CardBackground(isActive: true))
+      .contentShape(Rectangle())
     }
-    .buttonStyle(LauncherButtonStyle())
-    .foregroundStyle(.primary)
+    .buttonStyle(.plain)
+    .foregroundStyle(Argon.Tone.primary)
     .accessibilityLabel(activeAccessibilityLabel(for: profile))
   }
 
@@ -68,20 +69,19 @@ struct HomeProfileLauncher: View {
   private var activeAccessory: some View {
     if let activeStateTitle, let activeStateImageName {
       HStack(spacing: 6) {
-        Image(activeStateImageName)
-          .resizable()
-          .scaledToFit()
-          .frame(width: 24, height: 24)
+        Image(systemName: activeStateImageName)
+          .font(.callout.weight(.semibold))
 
         Text(activeStateTitle)
-          .font(.headline)
-          .fontWeight(.semibold)
+          .font(Argon.detail.weight(.semibold))
           .lineLimit(1)
           .minimumScaleFactor(0.72)
       }
+      .foregroundStyle(Argon.accent)
     } else {
       Text(DateFormatters.formatDurationClock(displayTime))
-        .font(.system(size: 20, weight: .bold, design: .monospaced))
+        .font(.title3.weight(.semibold).monospacedDigit().width(.expanded))
+        .foregroundStyle(Argon.accent)
         .lineLimit(1)
         .minimumScaleFactor(0.72)
         .contentTransition(.numericText())
@@ -100,45 +100,14 @@ struct HomeProfileLauncher: View {
   }
 
   private var activeStateImageName: String? {
+    // SF Symbols, not the colour stickers: they take the sheet's blue.
     if isPauseActive {
-      return "PauseStickerIcon"
+      return "pause"
     }
     if isBreakActive {
-      return "CoffeeStickerIcon"
+      return "cup.and.saucer"
     }
     return nil
-  }
-
-  private var activeButtonBackground: some View {
-    CardBackground(
-      isActive: true,
-      customColor: activeBlobColor,
-      backgroundColor: ArgonPalette.surface,
-      cornerRadius: activeButtonCornerRadius,
-      activeBlobScale: activeButtonBlobScale,
-      activeBlobCount: activeButtonBlobCount,
-      activeBlobSizeRange: activeButtonBlobSizeRange,
-      activeBlobWidthRange: activeButtonBlobWidthRange,
-      activeBlobHeightRange: activeButtonBlobHeightRange
-    )
-    .frame(height: activeButtonHeight)
-    .clipShape(RoundedRectangle(cornerRadius: activeButtonCornerRadius, style: .continuous))
-    .shadow(
-      color: themeManager.themeColor.opacity(0.18),
-      radius: 12,
-      x: 0,
-      y: 6
-    )
-    .shadow(
-      color: Color.black.opacity(0.14),
-      radius: 6,
-      x: 0,
-      y: 3
-    )
-  }
-
-  private var activeBlobColor: Color {
-    ArgonPalette.electricBlue
   }
 
   private func startTapped() {
@@ -168,7 +137,7 @@ struct HomeProfileLauncher: View {
       onStartTapped: {}
     )
   }
-  .background(Color(.systemGroupedBackground))
+  .argonAmbience()
   .environmentObject(ThemeManager.shared)
 }
 
@@ -188,7 +157,7 @@ struct HomeProfileLauncher: View {
       onStartTapped: {}
     )
   }
-  .background(Color(.systemGroupedBackground))
+  .argonAmbience()
   .environmentObject(ThemeManager.shared)
 }
 
@@ -209,6 +178,6 @@ struct HomeProfileLauncher: View {
       onStartTapped: {}
     )
   }
-  .background(Color(.systemGroupedBackground))
+  .argonAmbience()
   .environmentObject(ThemeManager.shared)
 }

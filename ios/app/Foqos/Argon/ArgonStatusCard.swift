@@ -45,29 +45,28 @@ struct ArgonStatusCard: View {
         }
         Spacer(minLength: 6)
         if store.state.overdueCount > 0 {
-          ArgonPill(text: "\(store.state.overdueCount)", colour: Argon.overdue)
+          ArgonPill(text: "\(store.state.overdueCount) late", colour: Argon.overdue, tinted: true)
         }
       }
     }
   }
 
   @ViewBuilder private var marker: some View {
-    if store.state.started != nil {
+    // Squares, as the checkbox and the pulse are: filled blue while Argon is
+    // on duty, an empty outline while it is not. No glow either way.
+    if store.state.started != nil || store.state.ticking {
       ArgonPulse()
     } else {
-      Circle()
-        .fill(store.state.ticking ? Argon.accent : Argon.Tone.faint.opacity(0.6))
-        .frame(width: 9, height: 9)
-        .shadow(color: store.state.ticking ? Argon.accent.opacity(0.9) : .clear, radius: 7)
+      Rectangle()
+        .strokeBorder(Argon.Tone.faint, lineWidth: 1)
+        .frame(width: 8, height: 8)
+        .accessibilityHidden(true)
     }
   }
 
   private var tint: Color {
     if store.state.started != nil { return Argon.running }
     if store.state.overdueCount > 0 { return Argon.overdue }
-    // Blue, never `.clear`: the glass takes its wash and its glow from this,
-    // so a clear tint renders the card as plain grey — which is exactly what
-    // it looked like on his phone.
     return Argon.accent
   }
 

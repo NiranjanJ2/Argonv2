@@ -99,33 +99,35 @@ struct HomeView: View {
       ArgonBackdrop()
 
       ScrollView(showsIndicators: false) {
-        VStack(alignment: .leading, spacing: 30) {
-          HStack(alignment: .center) {
-            AppTitle()
+        // Every box's vertical lines sit `Argon.margin` in from the screen
+        // edge, as on Today. Views that pad themselves for their overshoot
+        // (ArgonGlass and friends) get the margin less the overshoot.
+        VStack(alignment: .leading, spacing: 22) {
+          HStack(alignment: .firstTextBaseline) {
+            Text("Focus")
+              .font(Argon.screenTitle)
+              .foregroundStyle(Argon.Tone.primary)
             Spacer()
-            HStack(spacing: 8) {
-              RoundedButton(
-                "",
-                action: {
-                  showSettingsView = true
-                },
-                textColor: ArgonPalette.iceBlue,
-                iconName: "slider.horizontal.3")
+            DraftIconButton(
+              systemName: "slider.horizontal.3",
+              accessibilityLabel: "Focus settings"
+            ) {
+              showSettingsView = true
             }
           }
-          .padding(.trailing, 16)
-          .padding(.top, 18)
+          .padding(.horizontal, Argon.margin)
+          .padding(.top, 6)
 
           ArgonStatusCard {
             showSettingsView = true
           }
-          .padding(.horizontal, 16)
+          .padding(.horizontal, inset)
 
           // Weekend mode sits with the blocking controls rather than in the
           // stock settings screen, which is where he goes to change a server
           // address, not to decide how this weekend works.
           ArgonWeekendCard()
-            .padding(.horizontal, 16)
+            .padding(.horizontal, inset)
 
           HomeAlertsView(
             alerts: alertsManager.alerts,
@@ -133,7 +135,7 @@ struct HomeView: View {
               presentAlert(alert)
             }
           )
-          .padding(.horizontal, 16)
+          .padding(.horizontal, inset)
 
           if profiles.isEmpty {
             Welcome(
@@ -148,7 +150,7 @@ struct HomeView: View {
                 }
               }
             )
-            .padding(.horizontal, 16)
+            .padding(.horizontal, Argon.margin)
           }
 
           if !profiles.isEmpty {
@@ -159,7 +161,7 @@ struct HomeView: View {
                 dashboardInsightsContext = context
               }
             )
-            .padding(.horizontal, 16)
+            .padding(.horizontal, inset)
 
             HomeProfilesListView(
               profiles: profiles,
@@ -183,12 +185,17 @@ struct HomeView: View {
                 profileToShowStats = profile
               }
             )
-            .padding(.horizontal, 16)
+            .padding(.horizontal, Argon.margin)
           }
         }
+        .padding(.bottom, 24)
       }
     }
   }
+
+  /// Horizontal padding for views that already leave room for their own
+  /// overshoot, so their box lines land on `Argon.margin`.
+  private var inset: CGFloat { Argon.margin - Argon.overshoot }
 
   private var screen1: some View {
     screen0

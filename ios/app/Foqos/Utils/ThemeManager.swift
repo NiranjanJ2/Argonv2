@@ -3,28 +3,15 @@ import SwiftUI
 class ThemeManager: ObservableObject {
   static let shared = ThemeManager()
 
-  // Single source of truth for all theme colors
+  /// One colour. Foqos shipped twenty — Forest Green, Hot Pink, Electric
+  /// Lemonade — and each one repainted the whole Focus tab. The app has one
+  /// blue now (`Argon.accent`), so the choice is gone; a stored name from the
+  /// old list no longer matches and falls back to this.
+  ///
+  /// Hex rather than `Argon.accent`: the shield extension compiles this file
+  /// without `ArgonTheme.swift`.
   static let availableColors: [(name: String, color: Color)] = [
-    ("Argon Blue", Color(hex: "#5DA9FF")),
-    ("Grimace Purple", Color(hex: "#894fa3")),
-    ("Ocean Blue", Color(hex: "#007aff")),
-    ("Mint Fresh", Color(hex: "#00c6bf")),
-    ("Lime Zest", Color(hex: "#7fd800")),
-    ("Sunset Coral", Color(hex: "#ff5966")),
-    ("Hot Pink", Color(hex: "#ff2da5")),
-    ("Tangerine", Color(hex: "#ff9300")),
-    ("Lavender Dream", Color(hex: "#ba8eff")),
-    ("San Diego Merlot", Color(hex: "#7a1e3a")),
-    ("Forest Green", Color(hex: "#0b6e4f")),
-    ("Miami Vice", Color(hex: "#ff6ec7")),
-    ("Electric Lemonade", Color(hex: "#ccff00")),
-    ("Neon Grape", Color(hex: "#b026ff")),
-    ("Slate Stone", Color(hex: "#708090")),
-    ("Warm Sandstone", Color(hex: "#c4a77d")),
-    ("Midnight Navy", Color(hex: "#191970")),
-    ("Cherry Bomb", Color(hex: "#de3163")),
-    ("Turquoise Wave", Color(hex: "#40e0d0")),
-    ("Golden Hour", Color(hex: "#ffb347")),
+    ("Argon Blue", Color(hex: "#5B93F5"))
   ]
 
   private static let defaultColorName = "Argon Blue"

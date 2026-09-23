@@ -1,5 +1,10 @@
 import SwiftUI
 
+/// A section's name, drawn the way Today draws them: small, wide, sentence
+/// case, secondary grey. It was a 20pt serif heading with a glass capsule
+/// button beside it; the action is now plain blue words at the far end.
+///
+/// `buttonIcon` is accepted and ignored — the word says what it does.
 struct SectionTitle: View {
   let title: String
   let buttonText: String?
@@ -17,45 +22,19 @@ struct SectionTitle: View {
   }
 
   var body: some View {
-    HStack {
-      Text(title)
-        .font(.system(size: 20, weight: .semibold, design: .serif))
-        .foregroundStyle(ArgonPalette.ink)
-
-      Spacer()
-
-      if let buttonText = buttonText, let buttonAction = buttonAction {
-        RoundedButton(buttonText, action: buttonAction, iconName: buttonIcon)
-      }
+    if let buttonText, let buttonAction {
+      DraftSectionLabel(title: title, action: (buttonText, buttonAction))
+    } else {
+      DraftSectionLabel(title: title)
     }
-    .padding(.bottom, 10)
   }
 }
 
-// Preview
 #Preview {
   VStack(spacing: 24) {
-    SectionTitle("Recent Activity")
-
-    SectionTitle(
-      "Your Focus Sessions",
-      buttonText: "See All",
-      buttonAction: { print("See All tapped") })
-
-    SectionTitle(
-      "Weekly Insights",
-      buttonText: "View Report",
-      buttonAction: { print("View Report tapped") })
-
-    SectionTitle(
-      "Achievements",
-      buttonText: "Manage",
-      buttonAction: { print("Manage tapped") })
-
-    SectionTitle(
-      "App Usage",
-      buttonText: "Settings",
-      buttonAction: { print("Settings tapped") })
+    SectionTitle("Activity")
+    SectionTitle("Profiles", buttonText: "Manage", buttonAction: {})
   }
   .padding(20)
+  .argonAmbience()
 }

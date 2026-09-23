@@ -1,5 +1,12 @@
 import SwiftUI
 
+/// A sheet's primary action, full width.
+///
+/// The colour passed in is the button's tint rather than its fill: words in
+/// that colour over a faint wash of it, inside a draft box of it. So the blue
+/// calls read as blue outlines, and the red ones — emergency unblock, cancel a
+/// scan — become red as the brief allows it, a tint over a tint. It used to be
+/// a filled capsule (`.glassProminent` on iOS 26) with white text and a shadow.
 struct ActionButton: View {
   let title: String
   let backgroundColor: Color?
@@ -28,150 +35,51 @@ struct ActionButton: View {
     self.action = action
   }
 
+  /// System red is a bright fill colour; on the sheet red is always the soft
+  /// one, and only ever over its own wash.
+  private var tint: Color {
+    guard let backgroundColor else { return Argon.accent }
+    if backgroundColor == .red || backgroundColor == Argon.overdue { return Argon.overdue }
+    if backgroundColor == .gray { return Argon.Tone.secondary }
+    return Argon.accent
+  }
+
+  private var live: Bool { !(isLoading || isDisabled) }
+
   var body: some View {
-    Button(action: (isLoading || isDisabled) ? {} : action) {
+    Button(action: live ? action : {}) {
       HStack(spacing: 8) {
         if isLoading {
-          ProgressView()
-            .progressViewStyle(CircularProgressViewStyle(tint: .white))
-            .scaleEffect(0.8)
+          ProgressView().tint(tint).controlSize(.small)
         } else {
           if let iconName = iconName {
-            Image(systemName: iconName)
-              .font(.headline)
-              .foregroundColor(iconColor ?? .white)
+            Image(systemName: iconName).font(.body.weight(.semibold))
           }
-
-          Text(title)
-            .font(.headline)
-            .foregroundColor(.white)
+          Text(title).font(Argon.body.weight(.semibold))
         }
-      }.frame(maxWidth: .infinity)
-        .frame(height: 40)
-    }
-    .modifier(
-      GlassProminentIfAvailable(
-        backgroundColor: backgroundColor ?? Color.indigo,
-        isLoading: isLoading,
-        isDisabled: isDisabled
-      )
-    )
-    .disabled(isLoading || isDisabled)
-  }
-}
-
-private struct GlassProminentIfAvailable: ViewModifier {
-  let backgroundColor: Color
-  let isLoading: Bool
-  let isDisabled: Bool
-
-  func body(content: Content) -> some View {
-    Group {
-      if #available(iOS 26.0, *) {
-        content
-          .frame(height: 50)
-          .buttonStyle(.glassProminent)
-          .tint(backgroundColor)
-      } else {
-        content
-          .background(backgroundColor)
-          .opacity((isLoading || isDisabled) ? 0.6 : 1.0)
-          .clipShape(Capsule())
-          .shadow(color: Color.black.opacity(0.1), radius: 5, x: 0, y: 2)
-          .padding(.horizontal, 20)
       }
+      .foregroundStyle(live ? tint : Argon.Tone.faint)
+      .frame(maxWidth: .infinity)
+      .frame(height: 50)
+      .draftBox(stroke: live ? tint.opacity(0.7) : Argon.line,
+                fill: live ? tint.opacity(0.12) : .clear, overshoot: 6)
+      .contentShape(Rectangle())
     }
+    .buttonStyle(.plain)
+    .padding(6)
+    .disabled(!live)
   }
 }
 
 #Preview("Action Button Examples") {
   VStack(spacing: 20) {
-    // Basic button
-    ActionButton(title: "Save") {
-      print("Save tapped")
-    }
-
-    // Button with icon
-    ActionButton(
-      title: "Download",
-      iconName: "arrow.down.circle"
-    ) {
-      print("Download tapped")
-    }
-
-    // Loading state
-    ActionButton(
-      title: "Saving...",
-      isLoading: true
-    ) {
-      print("This won't execute while loading")
-    }
-
-    // Custom background with icon
-    ActionButton(
-      title: "Delete",
-      backgroundColor: .red,
-      iconName: "trash"
-    ) {
-      print("Delete tapped")
-    }
-
-    // Success button with icon
-    ActionButton(
-      title: "Complete",
-      backgroundColor: .green,
-      iconName: "checkmark.circle"
-    ) {
-      print("Complete tapped")
-    }
-
-    // Custom icon color example
-    ActionButton(
-      title: "Favorite",
-      backgroundColor: .gray,
-      iconName: "heart.fill",
-      iconColor: .red
-    ) {
-      print("Favorite tapped")
-    }
-
-    // Loading with custom color
-    ActionButton(
-      title: "Processing...",
-      backgroundColor: .orange,
-      isLoading: true
-    ) {
-      print("Processing")
-    }
-
-    // Warning button
-    ActionButton(
-      title: "Backup",
-      backgroundColor: .yellow,
-      iconName: "cloud.fill"
-    ) {
-      print("Backup tapped")
-    }
-
-    // Icon only style (short title)
-    ActionButton(
-      title: "Share",
-      backgroundColor: .blue,
-      iconName: "square.and.arrow.up"
-    ) {
-      print("Share tapped")
-    }
-
-    // Disabled state
-    ActionButton(
-      title: "Disabled",
-      backgroundColor: .gray,
-      iconName: "lock.fill",
-      isDisabled: true
-    ) {
-      print("Should not tap")
-    }
+    ActionButton(title: "Save") {}
+    ActionButton(title: "Download", iconName: "arrow.down.circle") {}
+    ActionButton(title: "Saving...", isLoading: true) {}
+    ActionButton(title: "Emergency Unblock", backgroundColor: .red,
+                 iconName: "exclamationmark.triangle.fill") {}
+    ActionButton(title: "Disabled", iconName: "lock.fill", isDisabled: true) {}
   }
   .padding()
-  .background(Color(.systemGroupedBackground))
+  .argonAmbience()
 }

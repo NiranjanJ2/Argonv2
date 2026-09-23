@@ -29,15 +29,15 @@ struct FourWeekHeatmapView: View {
   private func colorForHours(_ hours: Double) -> Color {
     switch hours {
     case 0:
-      return Color.gray.opacity(0.15)
+      return Argon.Ink.raised
     case 0..<1:
-      return themeManager.themeColor.opacity(0.3)
+      return Argon.accent.opacity(0.3)
     case 1..<3:
-      return themeManager.themeColor.opacity(0.5)
+      return Argon.accent.opacity(0.5)
     case 3..<5:
-      return themeManager.themeColor.opacity(0.7)
+      return Argon.accent.opacity(0.7)
     default:
-      return themeManager.themeColor.opacity(0.9)
+      return Argon.accent.opacity(0.9)
     }
   }
 
@@ -48,13 +48,12 @@ struct FourWeekHeatmapView: View {
         ForEach(legendData, id: \.0) { label, opacity in
           HStack(spacing: 4) {
             Rectangle()
-              .fill(themeManager.themeColor.opacity(opacity))
+              .fill(Argon.accent.opacity(opacity))
               .frame(width: 10, height: 10)
-              .cornerRadius(2)
 
             Text(label)
-              .font(.caption2)
-              .foregroundColor(.secondary)
+              .font(.caption2.monospacedDigit())
+              .foregroundStyle(Argon.Tone.faint)
           }
         }
       }
@@ -67,19 +66,15 @@ struct FourWeekHeatmapView: View {
 
     return VStack(spacing: 2) {
       Text(DateFormatters.formatDayNumber(date))
-        .font(.system(size: 10))
-        .foregroundColor(.secondary)
+        .font(.system(size: 10).monospacedDigit())
+        .foregroundStyle(Argon.Tone.faint)
 
       Rectangle()
         .fill(colorForHours(hours))
         .aspectRatio(1, contentMode: .fit)
-        .cornerRadius(4)
         .overlay(
-          RoundedRectangle(cornerRadius: 4)
-            .stroke(
-              isSelected ? themeManager.themeColor : Color.clear,
-              lineWidth: 2
-            )
+          Rectangle()
+            .strokeBorder(isSelected ? Argon.Tone.primary : Color.clear, lineWidth: 1.5)
         )
         .onTapGesture {
           onDateSelected(date)

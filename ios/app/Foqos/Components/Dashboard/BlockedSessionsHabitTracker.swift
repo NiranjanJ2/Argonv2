@@ -151,6 +151,7 @@ struct BlockedSessionsHabitTracker: View {
           buttonAction: { showingConfiguration = true },
           buttonIcon: "chart.line.uptrend.xyaxis"
         )
+        .padding(.horizontal, Argon.overshoot)
       }
 
       ZStack {
@@ -177,7 +178,9 @@ struct BlockedSessionsHabitTracker: View {
               )
             }
           }
-          .argonGlassPanel(cornerRadius: 24)
+          .argonGlassPanel()
+          // Room for the box's overshoot inside the clip below.
+          .padding(Argon.overshoot)
         }
       }
       .animation(.easeInOut(duration: 0.3), value: showHabitTracker)
