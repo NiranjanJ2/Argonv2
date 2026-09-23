@@ -9,7 +9,7 @@ import UserNotifications
 /// v2 unchanged, but nothing armed it, so the evening block that the 4 PM sheet
 /// exists to set simply never fired. This is the arming half.
 ///
-/// The server says *what* (the start he chose, or the 18:00 default, and which
+/// The server says *what* (the start he chose, or the 20:00 default, and which
 /// nights are school nights); this makes the system keep *when*. The schedule
 /// repeats daily and `ArgonRoutineActivity` filters the weekday at fire time,
 /// so it works with the app closed, the server down and the network off.

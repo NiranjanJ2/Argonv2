@@ -137,7 +137,7 @@ struct ArgonPlannerPayload: Codable, Equatable, Identifiable {
     longTerm = (try? c.decode([ArgonPlannerItem].self, forKey: .longTerm)) ?? []
     suggestions = (try? c.decode([ArgonPlannerSuggestion].self, forKey: .suggestions)) ?? []
     startAt = try? c.decode(String.self, forKey: .startAt)
-    defaultStart = (try? c.decode(String.self, forKey: .defaultStart)) ?? "18:00"
+    defaultStart = (try? c.decode(String.self, forKey: .defaultStart)) ?? "20:00"
     warningMinutes = (try? c.decode(Int.self, forKey: .warningMinutes)) ?? 30
   }
 

@@ -260,7 +260,7 @@ struct ArgonRoutine: Codable, Equatable {
 
   init(from decoder: Decoder) throws {
     let c = try decoder.container(keyedBy: CodingKeys.self)
-    defaultStart = try c.decodeIfPresent(String.self, forKey: .defaultStart) ?? "18:00"
+    defaultStart = try c.decodeIfPresent(String.self, forKey: .defaultStart) ?? "20:00"
     startAt = try c.decodeIfPresent(String.self, forKey: .startAt) ?? defaultStart
     chosen = try c.decodeIfPresent(Bool.self, forKey: .chosen) ?? false
     plannedToday = try c.decodeIfPresent(Bool.self, forKey: .plannedToday) ?? false

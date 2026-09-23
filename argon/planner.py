@@ -74,8 +74,9 @@ WARNING_MINUTES = 30
 BLOCK_WINDOW_MIN = 90
 
 #: When the evening starts if he never fills in the sheet. The block at this
-#: hour is the thing that makes him fill it in.
-DEFAULT_START_HHMM = "18:00"
+#: hour is the thing that makes him fill it in. 20:00, not v1's 18:00: he gets
+#: home, naps, and aims to start by eight, so a 6 PM block fell on the nap.
+DEFAULT_START_HHMM = "20:00"
 
 #: Sun-Thu, the evenings with a school day after them. Python weekday numbers,
 #: which is what the phone's ArgonRoutineSettings expects.
@@ -579,7 +580,7 @@ def _selftest() -> None:
 
         # -- routine ----------------------------------------------------------
         r = routine(s, at(14, 16))
-        assert r == {"start_at": "18:00", "chosen": False, "default_start": "18:00",
+        assert r == {"start_at": "20:00", "chosen": False, "default_start": "20:00",
                      "planned_today": False, "school_nights": [6, 0, 1, 2, 3],
                      "window_minutes": 90, "warning_minutes": 30}, r
 
@@ -610,7 +611,7 @@ def _selftest() -> None:
         assert out["errors"] == [], out["errors"]
         assert routine(s, at(14, 17))["start_at"] == "19:30"
         assert routine(s, at(14, 17))["chosen"] and routine(s, at(14, 17))["planned_today"]
-        assert routine(s, at(15, 17))["start_at"] == "18:00", "tomorrow is the default"
+        assert routine(s, at(15, 17))["start_at"] == "20:00", "tomorrow is the default"
         assert not is_due(s, at(14, 18)), "submitting closes it for the day"
         assert "starting at 19:30" in [e for e in t.window(2) if e.kind == "planned"][-1] \
             .payload["summary"]
