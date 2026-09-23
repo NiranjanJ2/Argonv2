@@ -146,6 +146,8 @@ actor ArgonClient {
       _ = try await request("v1/tasks/\(id)", method: "PATCH", body: ["started": false])
     case .complete(let id):
       _ = try await request("v1/tasks/\(id)", method: "PATCH", body: ["done": true])
+    case .move(let id, let due):
+      _ = try await request("v1/tasks/\(id)", method: "PATCH", body: ["due": due])
     case .add(let title, let due):
       var body: [String: Any] = ["title": title]
       if let due { body["due"] = due }

@@ -165,6 +165,14 @@ final class ArgonStore {
     await enqueue(.complete(taskID: task.id))
   }
 
+  /// Put it on another evening. v1's swipe to tomorrow; only offered for his
+  /// own tasks, because the Classroom sync owns an assignment's date and would
+  /// put it back within minutes.
+  func move(_ task: ArgonTask, to due: String) async {
+    apply(.move(taskID: task.id, due: due))
+    await enqueue(.move(taskID: task.id, due: due))
+  }
+
   func add(title: String, due: String? = nil) async {
     let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return }
@@ -242,6 +250,9 @@ final class ArgonStore {
     case .complete(let id):
       guard let i = state.tasks.firstIndex(where: { $0.id == id }) else { return }
       state.tasks[i].done = true
+    case .move(let id, let due):
+      guard let i = state.tasks.firstIndex(where: { $0.id == id }) else { return }
+      state.tasks[i].due = due
     case .add, .say, .markRead:
       break   // handled by the caller, which has the richer value
     }

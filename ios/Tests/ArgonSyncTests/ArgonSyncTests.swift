@@ -31,6 +31,19 @@ final class StubProtocol: URLProtocol {
   }
 }
 
+private func readAll(_ stream: InputStream) -> Data {
+  stream.open()
+  defer { stream.close() }
+  var data = Data()
+  var buffer = [UInt8](repeating: 0, count: 1024)
+  while stream.hasBytesAvailable {
+    let n = stream.read(&buffer, maxLength: buffer.count)
+    if n <= 0 { break }
+    data.append(buffer, count: n)
+  }
+  return data
+}
+
 private func tempName(_ label: String) -> String {
   "argon-test-\(label)-\(UUID().uuidString).json"
 }
@@ -205,6 +218,30 @@ final class StoreTests: XCTestCase {
 
     let posts = StubProtocol.seen.filter { $0 == "POST /v1/tasks" }
     XCTAssertEqual(posts.count, 1, "a queued write must be applied exactly once")
+  }
+
+  func testMovingATaskSendsTheNewDateAndShowsItAtOnce() async {
+    StubProtocol.handler = { request in
+      request.url!.path.contains("state") ? (200, Data(stateJSON.utf8))
+                                          : (200, Data(#"{"messages":[],"unread":0}"#.utf8))
+    }
+    let store = makeStore(label: "move")
+    await store.refresh()
+    let task = store.state.tasks.first { $0.id == "t2" }!
+
+    var body: [String: Any] = [:]
+    StubProtocol.handler = { request in
+      guard request.httpMethod == "PATCH" else { return (503, Data()) }
+      // URLProtocol sees the body as a stream, not httpBody.
+      let data = request.httpBodyStream.map(readAll) ?? Data()
+      body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+      return (200, Data(#"{"task":{}}"#.utf8))
+    }
+    // The read-back after the write fails, so the screen shows the optimistic
+    // change — which is the point: the swipe moves the row, not the round trip.
+    await store.move(task, to: "2099-09-21")
+    XCTAssertEqual(body["due"] as? String, "2099-09-21")
+    XCTAssertEqual(store.state.tasks.first { $0.id == "t2" }?.due, "2099-09-21")
   }
 
   func testRepeatedTextRetiresOneEchoPerArrival() async {

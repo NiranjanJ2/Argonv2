@@ -15,6 +15,7 @@ struct PendingWrite: Codable, Identifiable, Equatable {
     case start(taskID: String)
     case stop(taskID: String)
     case complete(taskID: String)
+    case move(taskID: String, due: String)
     case add(title: String, due: String?)
     case say(text: String)
     case markRead
@@ -41,6 +42,7 @@ struct PendingWrite: Codable, Identifiable, Equatable {
     case .start(let id): return "starting a task (\(id.prefix(6)))"
     case .stop(let id): return "stopping a task (\(id.prefix(6)))"
     case .complete(let id): return "completing a task (\(id.prefix(6)))"
+    case .move(let id, let due): return "moving a task (\(id.prefix(6))) to \(due)"
     case .add(let title, _): return "adding “\(title)”"
     case .say(let text): return "sending “\(text.prefix(30))”"
     case .markRead: return "marking messages read"

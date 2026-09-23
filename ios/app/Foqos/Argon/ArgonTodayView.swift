@@ -11,25 +11,32 @@ struct ArgonTodayView: View {
   @FocusState private var addFocused: Bool
 
   var body: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 16) {
+    // A List, not a ScrollView of cards: `.swipeActions` only exists on List
+    // rows. Inside the old ScrollView the Start swipe compiled and did nothing,
+    // so the phone had no way to start a task at all — every start in the
+    // transcript came from the Mac widget.
+    List {
+      Group {
         header
         if let failure = store.failure {
           ArgonFailureCard(text: failure) { store.dismissFailure() }
         }
-        statusCard
-        boardCard
-        overdueCard
+        // The brief first. It is the one thing on this screen written for him
+        // today, and it sat under the board and the late pile.
         briefCard
-        futureCard
-        budgetCard
+        statusCard
       }
-      .padding(.horizontal, 18)
+      .argonCardRow()
+
+      boardSection
+      overdueSection
+      futureSection
     }
+    .listStyle(.plain)
+    .scrollContentBackground(.hidden)
     .scrollIndicators(.hidden)
-    // Clears the floating tab bar. A trailing spacer is not enough: when the
-    // content already fits there is nothing to scroll, so the last card just
-    // sits underneath the bar.
+    .environment(\.defaultMinListRowHeight, 0)
+    // Clears the floating tab bar.
     .contentMargins(.bottom, 96, for: .scrollContent)
     .refreshable { await store.refresh() }
     .argonAmbience(ticking: store.state.ticking)
@@ -122,35 +129,22 @@ struct ArgonTodayView: View {
     }
   }
 
-  private var boardCard: some View {
-    ArgonGlass(padding: 0) {
-      VStack(spacing: 0) {
-        HStack {
-          Text("Due").font(Argon.cardTitle).foregroundStyle(Argon.Tone.primary)
-          Spacer()
-          if !store.state.tonight.isEmpty {
-            ArgonPill(text: "\(store.state.tonight.count)")
-          }
-        }
-        .padding(.horizontal, 18).padding(.top, 18).padding(.bottom, 12)
-
-        if store.state.tonight.isEmpty {
-          Text(store.connection.isLive ? "Nothing due tonight." : "Nothing cached.")
-            .font(Argon.body).foregroundStyle(Argon.Tone.faint)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 18).padding(.bottom, 18)
-        }
-
-        // The started task is the hero card above; repeating it here cost
-        // most of a screenful.
-        ForEach(store.state.tonight.filter { !$0.isStarted }) { task in
-          ArgonDivider().padding(.leading, 18)
-          ArgonTaskRow(task: task, store: store)
-        }
-
-        ArgonDivider().padding(.leading, 18)
-        addRow
+  private var boardSection: some View {
+    Section {
+      // The started task is the hero card above; repeating it here cost
+      // most of a screenful.
+      ForEach(store.state.tonight.filter { !$0.isStarted }) { task in
+        ArgonTaskRow(task: task, store: store).argonTaskRow()
       }
+      if store.state.tonight.isEmpty {
+        Text(store.connection.isLive ? "Nothing due tonight." : "Nothing cached.")
+          .font(Argon.body).foregroundStyle(Argon.Tone.faint)
+          .padding(.vertical, 6)
+          .argonTaskRow()
+      }
+      addRow.argonTaskRow()
+    } header: {
+      sectionHeader("Due", count: store.state.tonight.count, colour: Argon.accent)
     }
   }
 
@@ -162,7 +156,7 @@ struct ArgonTodayView: View {
             .font(.title3).foregroundStyle(Argon.accent)
             .argonGlow(strength: 0.6)
           TextField("", text: $newTask, prompt:
-                      Text("New task").foregroundStyle(Argon.Tone.faint))
+                      Text("New task for tonight").foregroundStyle(Argon.Tone.faint))
             .font(Argon.body).foregroundStyle(Argon.Tone.primary)
             .focused($addFocused).submitLabel(.done).onSubmit(commit)
           Button("Add", action: commit)
@@ -181,43 +175,77 @@ struct ArgonTodayView: View {
             Spacer()
           }
           .foregroundStyle(Argon.accent.opacity(0.85))
+          .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
       }
     }
-    .padding(.horizontal, 18).padding(.vertical, 15)
+    .padding(.vertical, 6)
   }
 
   /// Late work, behind a count. Twenty-two red pills on the main board made
   /// every row look equally urgent, which is the same as none of them being.
-  @ViewBuilder private var overdueCard: some View {
+  @ViewBuilder private var overdueSection: some View {
     if !store.state.overdue.isEmpty {
-      ArgonGlass(tint: Argon.overdue, padding: 0) {
-        VStack(spacing: 0) {
-          Button {
-            withAnimation(.spring(duration: 0.3)) { showOverdue.toggle() }
-          } label: {
-            HStack {
-              Text("Late").font(Argon.cardTitle).foregroundStyle(Argon.Tone.primary)
-              ArgonPill(text: "\(store.state.overdue.count)", colour: Argon.overdue)
-              Spacer()
-              Image(systemName: showOverdue ? "chevron.up" : "chevron.down")
-                .font(.footnote).foregroundStyle(Argon.Tone.faint)
-            }
-            .padding(.horizontal, 18).padding(.vertical, 18)
-            .contentShape(Rectangle())
-          }
-          .buttonStyle(.plain)
-
-          if showOverdue {
-            ForEach(store.state.overdue) { task in
-              ArgonDivider().padding(.leading, 18)
-              ArgonTaskRow(task: task, store: store, showDue: true)
-            }
+      Section {
+        if showOverdue {
+          ForEach(store.state.overdue) { task in
+            ArgonTaskRow(task: task, store: store, showDue: true).argonTaskRow()
           }
         }
+      } header: {
+        foldHeader("Late", count: store.state.overdue.count, colour: Argon.overdue,
+                   open: $showOverdue)
       }
     }
+  }
+
+  /// Work that is real but not yet his problem, folded away with the count in
+  /// the header, so nothing is hidden and next week is not fifty rows down.
+  @ViewBuilder private var futureSection: some View {
+    let later = store.state.future
+    if !later.isEmpty {
+      Section {
+        if showFuture {
+          ForEach(later) { task in
+            ArgonTaskRow(task: task, store: store, showDue: true).argonTaskRow()
+          }
+        }
+      } header: {
+        foldHeader("Future work", count: later.count, colour: Argon.accent,
+                   open: $showFuture)
+      }
+    }
+  }
+
+  private func sectionHeader(_ title: String, count: Int, colour: Color) -> some View {
+    HStack {
+      Text(title).font(Argon.cardTitle).foregroundStyle(Argon.Tone.primary)
+      Spacer()
+      if count > 0 { ArgonPill(text: "\(count)", colour: colour) }
+    }
+    .textCase(nil)
+    .padding(.top, 8)
+  }
+
+  private func foldHeader(_ title: String, count: Int, colour: Color,
+                          open: Binding<Bool>) -> some View {
+    Button {
+      withAnimation(.snappy(duration: 0.22)) { open.wrappedValue.toggle() }
+    } label: {
+      HStack(spacing: 10) {
+        Text(title).font(Argon.cardTitle).foregroundStyle(Argon.Tone.primary)
+        ArgonPill(text: "\(count)", colour: colour)
+        Spacer()
+        Image(systemName: open.wrappedValue ? "chevron.up" : "chevron.down")
+          .font(.footnote).foregroundStyle(Argon.Tone.faint)
+      }
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .textCase(nil)
+    .padding(.top, 8)
+    .accessibilityLabel("\(title), \(count) items")
   }
 
   /// The afternoon brief, at the top, until he dismisses it.
@@ -262,89 +290,13 @@ struct ArgonTodayView: View {
     }
   }
 
-  /// Work that is real but not yet his problem, folded away.
-  ///
-  /// This replaced "What Argon knows", which listed the standing facts the
-  /// agent had recorded. Interesting once; after that it was a block of text
-  /// he had already read, sitting above the only thing on the screen he acts
-  /// on. Future work at least becomes tonight's work eventually.
-  ///
-  /// Collapsed by default with the count in the header, so nothing is hidden —
-  /// the whole board sorted by date put August at the top and next week fifty
-  /// rows down, which is the failure this is avoiding.
-  @ViewBuilder private var futureCard: some View {
-    let later = store.state.future
-    if !later.isEmpty {
-      ArgonGlass(tint: Argon.accentDeep, padding: 0) {
-        VStack(alignment: .leading, spacing: 0) {
-          Button {
-            withAnimation(.snappy(duration: 0.22)) { showFuture.toggle() }
-          } label: {
-            HStack(spacing: 10) {
-              Image(systemName: showFuture ? "chevron.down" : "chevron.right")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(Argon.accentSoft)
-              Text("Future work")
-                .font(Argon.heading).foregroundStyle(Argon.Tone.primary)
-              Spacer()
-              ArgonPill(text: "\(later.count)", colour: Argon.accent)
-            }
-            .padding(.horizontal, 18)
-            .frame(minHeight: 52)
-            .contentShape(Rectangle())
-          }
-          .buttonStyle(.plain)
-          .accessibilityLabel("Future work, \(later.count) items")
-
-          if showFuture {
-            ForEach(later) { task in
-              ArgonDivider().padding(.leading, 18)
-              ArgonTaskRow(task: task, store: store, showDue: true)
-            }
-            .padding(.bottom, 4)
-          }
-        }
-      }
-    }
-  }
-
-  @ViewBuilder private var budgetCard: some View {
-    if let budget = store.state.budget, budget.cap > 0 {
-      ArgonGlass(padding: 16) {
-        VStack(alignment: .leading, spacing: 10) {
-          HStack {
-            Text("This month").font(Argon.label).foregroundStyle(Argon.Tone.secondary)
-            Spacer()
-            Text(String(format: "$%.2f of $%.0f", budget.spent, budget.cap))
-              .font(Argon.mono)
-              .foregroundStyle(budget.isNearCap ? Argon.overdue : Argon.Tone.primary)
-          }
-          GeometryReader { geo in
-            ZStack(alignment: .leading) {
-              Capsule().fill(Color.white.opacity(0.10))
-              Capsule()
-                .fill(LinearGradient(
-                  colors: budget.isNearCap ? [Argon.overdue, Argon.overdue]
-                                           : [Argon.accentDeep, Argon.accent],
-                  startPoint: .leading, endPoint: .trailing))
-                .frame(width: max(6, geo.size.width * min(budget.spent / budget.cap, 1)))
-            }
-          }
-          .frame(height: 6)
-          if budget.isNearCap {
-            Text("Argon goes quiet at the cap.")
-              .font(Argon.label).foregroundStyle(Argon.overdue)
-          }
-        }
-      }
-    }
-  }
-
   private func commit() {
     let title = newTask
     newTask = ""
     adding = false
-    Task { await store.add(title: title) }
+    // Typed under "Due", so due tonight. Undated, it filed itself under the
+    // folded Future card and looked like it had not been added.
+    Task { await store.add(title: title, due: ArgonDate.today()) }
   }
 }
 
@@ -353,8 +305,13 @@ struct ArgonTodayView: View {
 struct ArgonTaskRow: View {
   let task: ArgonTask
   let store: ArgonStore
-  /// Inside the Late card every row is late, so the date is what varies.
+  /// Inside the Late and Future sections the date is what varies.
   var showDue = false
+
+  /// Only his own tasks can be moved. The Classroom sync owns an assignment's
+  /// date and would put it back within minutes, which reads as the swipe
+  /// failing.
+  private var movable: Bool { !task.isLocal && task.source != "classroom" }
 
   var body: some View {
     HStack(spacing: 14) {
@@ -362,16 +319,19 @@ struct ArgonTaskRow: View {
         Image(systemName: task.done ? "checkmark.circle.fill" : "circle")
           .font(.title2)
           .foregroundStyle(task.done ? Argon.running : Argon.Tone.faint)
+          // A 24pt circle is too small to hit reliably; v1 padded it to 44.
+          .frame(width: 44, height: 44)
+          .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
       .disabled(task.isLocal)
+      .accessibilityLabel("Complete \(task.title)")
 
       VStack(alignment: .leading, spacing: 3) {
         Text(task.title)
           .font(Argon.body)
           .foregroundStyle(task.isLocal ? Argon.Tone.faint : Argon.Tone.primary)
           .strikethrough(task.done, color: Argon.Tone.faint)
-          // Two lines, or one Codecademy assignment becomes a four-line row.
           .lineLimit(2)
           .fixedSize(horizontal: false, vertical: true)
         if let subject = task.subject, !subject.isEmpty {
@@ -387,8 +347,7 @@ struct ArgonTaskRow: View {
       if task.isStarted {
         Image(systemName: "play.fill").font(.caption).foregroundStyle(Argon.running)
       }
-      let label = showDue ? (task.due.map { String($0.prefix(10).dropFirst(5)) } ?? "")
-                          : task.dueLabel()
+      let label = showDue ? (task.due.map(ArgonDate.short) ?? "") : task.dueLabel()
       if !label.isEmpty {
         ArgonPill(text: label,
                   colour: showDue ? Argon.Tone.faint
@@ -396,15 +355,65 @@ struct ArgonTaskRow: View {
                         : label == "today" ? Argon.accentSoft : Argon.Tone.faint)
       }
     }
-    .padding(.horizontal, 18).padding(.vertical, 14)
+    .padding(.vertical, 4)
     .contentShape(Rectangle())
-    .swipeActions(edge: .leading, allowsFullSwipe: true) {
-      if !task.isStarted && !task.isLocal {
-        Button { Task { await store.start(task) } } label: {
-          Label("Start", systemImage: "play.fill")
+    // v1: tap the row to start it. Starting also raises the shield, and Stop
+    // on the card above takes it down again.
+    .onTapGesture {
+      guard !task.isStarted, !task.isLocal else { return }
+      Task { await store.start(task) }
+    }
+    // His muscle memory from v1: swipe left completes, swipe right defers.
+    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+      if !task.isLocal {
+        Button { Task { await store.complete(task) } } label: {
+          Label("Done", systemImage: "checkmark.circle.fill")
         }.tint(Argon.running)
       }
+      if movable {
+        Button { Task { await store.move(task, to: ArgonDate.tomorrow()) } } label: {
+          Label("Tomorrow", systemImage: "moon.zzz.fill")
+        }.tint(Argon.accentDeep)
+      }
     }
+    .swipeActions(edge: .leading, allowsFullSwipe: true) {
+      if movable {
+        Button { Task { await store.move(task, to: ArgonDate.tomorrow()) } } label: {
+          Label("Tomorrow", systemImage: "moon.zzz.fill")
+        }.tint(Argon.accentDeep)
+      }
+    }
+    .contextMenu {
+      if !task.isStarted && !task.isLocal {
+        Button("Start", systemImage: "play.fill") { Task { await store.start(task) } }
+      }
+      if movable {
+        Button("Due tomorrow", systemImage: "calendar.badge.clock") {
+          Task { await store.move(task, to: ArgonDate.tomorrow()) }
+        }
+      }
+      if !task.isLocal {
+        Button("Complete", systemImage: "checkmark.circle") {
+          Task { await store.complete(task) }
+        }
+      }
+    }
+  }
+}
+
+private extension View {
+  /// A glass card sitting in the list as itself: no row chrome around it.
+  func argonCardRow() -> some View {
+    listRowBackground(Color.clear)
+      .listRowSeparator(.hidden)
+      .listRowInsets(EdgeInsets(top: 8, leading: 18, bottom: 8, trailing: 18))
+  }
+
+  /// One task on a faint pane, hairline between rows.
+  func argonTaskRow() -> some View {
+    listRowBackground(Color.white.opacity(0.05))
+      .listRowSeparatorTint(Argon.hairline)
+      .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 18))
   }
 }
 

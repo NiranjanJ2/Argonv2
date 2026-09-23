@@ -80,7 +80,7 @@ struct ArgonTask: Codable, Identifiable, Equatable, Hashable {
     if day < today { return "overdue" }
     if day == today { return "today" }
     if day == ArgonDate.tomorrow(after: today) { return "tomorrow" }
-    return String(day.dropFirst(5))
+    return ArgonDate.short(day)
   }
 
   /// Tonight's work: late, due today, or due tomorrow.
@@ -313,6 +313,15 @@ enum ArgonDate {
                                                            value: 1, to: date)
     else { return today }
     return f.string(from: next)
+  }
+
+  /// "Fri Sep 18" from "2026-09-18". v1 showed the weekday; the bare "09-18"
+  /// this replaced made him convert a date to a day in his head.
+  static func short(_ day: String) -> String {
+    guard let date = formatter().date(from: String(day.prefix(10))) else { return day }
+    let f = formatter()
+    f.dateFormat = "EEE MMM d"
+    return f.string(from: date)
   }
 
   private static func dayString(_ date: Date) -> String {
