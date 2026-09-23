@@ -1,5 +1,9 @@
 import SwiftUI
 
+/// A screen's name in the sheet's lettering: SF Pro expanded, no ornament.
+///
+/// It used to trail a small blue dot with a blue shadow under it — a glow, and
+/// the only thing on the title line competing with the words.
 struct AppTitle: View {
   let title: String
   let font: Font
@@ -8,9 +12,9 @@ struct AppTitle: View {
 
   init(
     _ title: String = "Argon",
-    font: Font = .argonDisplay(36),
+    font: Font = Argon.screenTitle,
     fontWeight: Font.Weight = .semibold,
-    horizontalPadding: CGFloat = 16
+    horizontalPadding: CGFloat = Argon.margin
   ) {
     self.title = title
     self.font = font
@@ -19,30 +23,19 @@ struct AppTitle: View {
   }
 
   var body: some View {
-    HStack(alignment: .firstTextBaseline, spacing: 8) {
-      Text(title)
-        .font(font)
-        .fontWeight(fontWeight)
-        .tracking(-0.8)
-
-      Circle()
-        .fill(ArgonPalette.electricBlue)
-        .frame(width: 6, height: 6)
-        .shadow(color: ArgonPalette.electricBlue, radius: 7)
-    }
-    .foregroundStyle(ArgonPalette.ink)
-    .padding(.horizontal, horizontalPadding)
+    Text(title)
+      .font(font)
+      .fontWeight(fontWeight)
+      .foregroundStyle(Argon.Tone.primary)
+      .padding(.horizontal, horizontalPadding)
   }
 }
 
-// Preview
 #Preview {
-  VStack(spacing: 24) {
+  VStack(alignment: .leading, spacing: 24) {
     AppTitle()
-
-    AppTitle("Argon", font: .title, fontWeight: .semibold)
-
-    AppTitle("Custom Title", font: .title2, fontWeight: .medium, horizontalPadding: 24)
+    AppTitle("Focus")
   }
   .padding(20)
+  .argonAmbience()
 }

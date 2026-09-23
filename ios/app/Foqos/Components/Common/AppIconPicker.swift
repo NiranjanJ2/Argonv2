@@ -13,8 +13,13 @@ struct AppIconPicker: View {
     count: 3
   )
 
+  /// Two List rows: the section's name, then one draft box holding the grid.
+  /// Must sit inside a plain `List`.
   var body: some View {
-    Section("App Icon") {
+    Text("App icon").font(Argon.caption).foregroundStyle(Argon.Tone.secondary)
+      .draftLabelRow()
+
+    VStack(alignment: .leading, spacing: 8) {
       LazyVGrid(columns: columns, spacing: 12) {
         ForEach(AppIconOption.allCases) { icon in
           Button {
@@ -25,27 +30,18 @@ struct AppIconPicker: View {
                 .resizable()
                 .aspectRatio(contentMode: .fit)
                 .frame(width: 64, height: 64)
+                // The icon keeps its own squircle — it is the artwork, not
+                // chrome. The selection is a square drawn around it.
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .padding(5)
                 .overlay {
-                  RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(
-                      isSelected(icon) ? selectionColor : .clear,
-                      lineWidth: 3
-                    )
-                }
-                .overlay(alignment: .topTrailing) {
-                  if isSelected(icon) {
-                    Image(systemName: "checkmark.circle.fill")
-                      .symbolRenderingMode(.palette)
-                      .foregroundStyle(.white, selectionColor)
-                      .background(Circle().fill(.background))
-                      .offset(x: 6, y: -6)
-                  }
+                  Rectangle().strokeBorder(
+                    isSelected(icon) ? Argon.accent : Color.clear, lineWidth: 1)
                 }
 
               Text(icon.displayName)
-                .font(.caption)
-                .foregroundStyle(.primary)
+                .font(Argon.label)
+                .foregroundStyle(isSelected(icon) ? Argon.accent : Argon.Tone.secondary)
                 .lineLimit(1)
             }
             .frame(maxWidth: .infinity)
@@ -57,14 +53,15 @@ struct AppIconPicker: View {
           .accessibilityAddTraits(isSelected(icon) ? .isSelected : [])
         }
       }
-      .padding(.vertical, 8)
 
       if !UIApplication.shared.supportsAlternateIcons {
         Text("Alternate app icons are not available on this device.")
-          .font(.caption)
-          .foregroundStyle(.secondary)
+          .font(Argon.label)
+          .foregroundStyle(Argon.Tone.faint)
       }
     }
+    .padding(.vertical, 12)
+    .draftRow(.single)
     .alert("Unable to Change App Icon", isPresented: $showError) {
       Button("OK") {}
     } message: {
@@ -146,7 +143,7 @@ private enum AppIconOption: String, CaseIterable, Identifiable {
 }
 
 #Preview {
-  Form {
-    AppIconPicker(selectionColor: .purple)
+  List {
+    AppIconPicker(selectionColor: Argon.accent)
   }
 }

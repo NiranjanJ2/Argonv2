@@ -1,6 +1,12 @@
 import SwiftUI
 import UIKit
 
+/// A small secondary control: words, an icon or both, inside a draft box.
+///
+/// Name kept for its call sites. It was a glass capsule — `glassEffect` on
+/// iOS 26, a slate fill before it — under a gradient stroke. Now it is the
+/// same outline every box on the sheet uses, with nothing behind it.
+/// `backgroundColor` is ignored; the sheet has no filled controls.
 struct RoundedButton: View {
   let text: String
   let action: () -> Void
@@ -14,8 +20,8 @@ struct RoundedButton: View {
   init(
     _ text: String,
     action: @escaping () -> Void,
-    backgroundColor: Color = Color.secondary.opacity(0.2),
-    textColor: Color = ArgonPalette.mutedInk,
+    backgroundColor: Color = .clear,
+    textColor: Color = Argon.accent,
     font: Font = .subheadline,
     fontWeight: Font.Weight = .medium,
     iconName: String? = nil,
@@ -33,9 +39,7 @@ struct RoundedButton: View {
 
   var body: some View {
     Button(action: {
-      let impactFeedback = UIImpactFeedbackGenerator(style: .light)
-      impactFeedback.impactOccurred()
-
+      UIImpactFeedbackGenerator(style: .light).impactOccurred()
       action()
     }) {
       HStack(spacing: 6) {
@@ -48,7 +52,7 @@ struct RoundedButton: View {
         if let imageName = imageName {
           Image(imageName)
             .resizable()
-            .renderingMode(.original)
+            .renderingMode(.template)
             .scaledToFit()
             .frame(width: 18, height: 18)
         }
@@ -60,86 +64,22 @@ struct RoundedButton: View {
             .lineLimit(1)
         }
       }
-      .foregroundColor(textColor)
+      .foregroundStyle(textColor)
       .padding(.horizontal, 12)
-      .padding(.vertical, 8)
-      .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-      .glassButtonBackground(cornerRadius: 16)
-      .overlay(
-        RoundedRectangle(cornerRadius: 16, style: .continuous)
-          .strokeBorder(
-            LinearGradient(
-              colors: [
-                .white.opacity(0.18),
-                ArgonPalette.electricBlue.opacity(0.12),
-              ],
-              startPoint: .topLeading,
-              endPoint: .bottomTrailing
-            )
-          )
-      )
+      .frame(minWidth: 40, minHeight: 40)
+      .draftBox(overshoot: 5)
+      .contentShape(Rectangle())
     }
-    .buttonStyle(PlainButtonStyle())
+    .buttonStyle(.plain)
   }
 }
 
-extension View {
-  @ViewBuilder
-  fileprivate func glassButtonBackground(cornerRadius: CGFloat) -> some View {
-    if #available(iOS 26.0, *) {
-      self.modifier(GlassBackgroundModifier(cornerRadius: cornerRadius))
-    } else {
-      self
-        .background(
-          ArgonPalette.surface.opacity(0.78),
-          in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        )
-    }
-  }
-}
-
-@available(iOS 26.0, *)
-private struct GlassBackgroundModifier: ViewModifier {
-  let cornerRadius: CGFloat
-
-  func body(content: Content) -> some View {
-    content
-      .glassEffect(in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-  }
-}
-
-// Preview
 #Preview {
-  VStack(spacing: 16) {
-    RoundedButton("See All") {
-      print("See All tapped")
-    }
-
-    RoundedButton(
-      "View Report",
-      action: { print("View Report tapped") },
-      iconName: "chart.bar")
-
-    RoundedButton(
-      "Custom Style",
-      action: { print("Custom tapped") },
-      backgroundColor: .blue,
-      textColor: .white,
-      iconName: "star.fill")
-
-    RoundedButton(
-      "Large Button",
-      action: { print("Large tapped") },
-      backgroundColor: .green.opacity(0.2),
-      textColor: .green,
-      font: .title3,
-      fontWeight: .semibold,
-      iconName: "checkmark.circle")
-
-    RoundedButton(
-      "Settings",
-      action: { print("Settings tapped") },
-      iconName: "gear")
+  VStack(spacing: 20) {
+    RoundedButton("See All") {}
+    RoundedButton("View Report", action: {}, iconName: "chart.bar")
+    RoundedButton("", action: {}, iconName: "slider.horizontal.3")
   }
   .padding(20)
+  .argonAmbience()
 }

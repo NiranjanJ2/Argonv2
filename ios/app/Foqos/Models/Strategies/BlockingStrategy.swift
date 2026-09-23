@@ -196,3 +196,23 @@ struct BlockingStrategyIconImage: View {
       .scaledToFit()
   }
 }
+
+/// The strategy as an SF Symbol, for places on the Focus sheet that draw it
+/// in the sheet's blue. `BlockingStrategyIconImage` is a colour sticker and
+/// ignores font and foreground style, so at a `.footnote` call site it filled
+/// whatever space it was given.
+struct BlockingStrategySymbol: View {
+  let strategy: BlockingStrategy?
+
+  private var name: String {
+    guard let strategy else { return "lock" }
+    if strategy.usesNFC { return "wave.3.right" }
+    if strategy.usesQRCode { return "qrcode" }
+    if strategy.hasTimer { return "timer" }
+    return "lock"
+  }
+
+  var body: some View {
+    Image(systemName: name)
+  }
+}

@@ -1,17 +1,12 @@
 import SwiftUI
 
-/// Slate, with blue reserved for one job: showing what is selected.
+/// v1's design system, re-pointed at the drawing sheet (`ArgonTheme`).
 ///
 /// The previous palette was near-black navy under four stacked gradients, a
-/// floating orb and glass panels with gradient strokes. It looked considered
-/// and it read badly: body text sat on a moving background, every surface
-/// glowed slightly, so nothing glowed *meaningfully*, and the decoration took
-/// the top third of the screen before a single task appeared.
-///
-/// Slate gives text a flat, even ground. Blue then means exactly one thing —
-/// this is the thing you picked — which is why selection is the only place a
-/// glow survives.
-/// v1's design system, re-pointed at the new slate theme.
+/// floating orb and glass panels with gradient strokes; then a slate pass with
+/// an inset glow for selection. Now every primitive here draws linework: boxes
+/// are outlines with overshooting edges, selection is a blue outline over a
+/// faint blue wash, and nothing glows.
 ///
 /// `ArgonPalette` and friends are referenced 164 times across twenty-three
 /// *Foqos* files — v1's Argon theme had quietly become the whole app's theme.
@@ -29,13 +24,14 @@ enum ArgonPalette {
   static let surface = Argon.Ink.slate
   static let surfaceRaised = Argon.Ink.raised
   /// Hairlines. Visible against surface without drawing the eye.
-  static let hairline = Color.white.opacity(0.10)
+  static let hairline = Argon.line
 
   /// The one accent. Used for selection and for nothing decorative.
   static let electricBlue = Argon.accent
-  static let iceBlue = Color(red: 0.561, green: 0.761, blue: 0.898)
+  /// Was a paler second blue. One blue now.
+  static let iceBlue = Argon.accent
   static let cobalt = Argon.accentDeep
-  static let cyan = Color(red: 0.388, green: 0.784, blue: 0.910)
+  static let cyan = Argon.accent
 
   /// Body text at full strength, and the quieter tier for captions.
   static let ink = Argon.Tone.primary
@@ -46,18 +42,15 @@ enum ArgonPalette {
 }
 
 extension Font {
-  /// Was serif. A display serif at 23pt on a phone, over a gradient, is harder
-  /// to read than the system face at the same size — and every other line in
-  /// the app was already system, so it read as a different app's heading.
+  /// Was serif, then rounded. Now the expanded width `Argon.screenTitle` uses,
+  /// so a Foqos heading and an Argon one are the same lettering.
   static func argonDisplay(_ size: CGFloat, weight: Font.Weight = .semibold) -> Font {
-    // `.custom(size:relativeTo:)`, not `.system(size:)`: call sites pass a
-    // point size but it must still scale with the text size he chose in
-    // Settings. A fixed size ignores that completely.
-    .system(size: size, weight: weight, design: .rounded)
+    // SF Pro expanded, as `Argon.screenTitle`: drawing-sheet lettering.
+    .system(size: size, weight: weight).width(.expanded)
   }
 }
 
-/// The page behind everything. Flat slate.
+/// The page behind everything. The sheet's flat ground.
 ///
 /// Deliberately not a gradient. The old one moved under scrolling text and
 /// forced every card to fight it for contrast.
@@ -69,85 +62,37 @@ struct ArgonBackdrop: View {
   }
 }
 
-/// Light that comes from inside the button, not off it.
+/// Kept for its call sites; it used to be an inset glow — a recessed face lit
+/// from the rim by three blurred strokes. Now it is the sheet's own idiom: an
+/// outline whose edges run past the corners. Live or chosen, the outline turns
+/// blue over a faint blue wash; otherwise it is a construction line.
 ///
-/// The obvious way to show a live control is a coloured drop shadow, which
-/// throws light outward onto the page. It reads as the button hovering above
-/// the screen, and on a dark ground it smears into whatever is behind it.
-///
-/// This does the opposite. The footprint never changes — nothing reflows and
-/// nothing jumps — but the face insets, so the control looks pressed into the
-/// surface. The lip that reveals is where the light sits, and the glow is
-/// masked to the face so it falls inward across the button rather than out
-/// into the page.
+/// The footprint never changes between states, so nothing reflows when a
+/// choice is made. The overshoot is drawn outside the bounds, into whatever
+/// spacing the caller left — which is what makes neighbouring boxes read as
+/// one drawing.
 struct ArgonInsetGlow: ViewModifier {
   var isActive: Bool
+  /// Ignored. Kept so call sites compile; the sheet has square corners.
   var cornerRadius: CGFloat = 12
-  /// How far the face sits below the rim. Enough that the lip reads as a
-  /// recess rather than as a slightly thick border.
-  var inset: CGFloat = 4
+  /// A deeper wash while pressed.
+  var inset: CGFloat = 3
   var tint: Color = ArgonPalette.electricBlue
-
-  private var faceRadius: CGFloat { max(2, cornerRadius - inset) }
 
   func body(content: Content) -> some View {
     content
-      // Deliberately no padding on the content: padding it would grow the
-      // whole control by twice the inset the moment it lit up, which is the
-      // layout jump this effect exists to avoid. The face insets instead, so
-      // the footprint is identical lit or dark.
-      .background {
-        ZStack {
-          // The well. Darker than the page, so the lip around the face reads
-          // as depth rather than as a gap someone forgot to fill.
-          RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-            .fill(isActive ? Color.black.opacity(0.45) : Color.clear)
-
-          faceShape
-            .fill(isActive ? ArgonPalette.surfaceRaised : ArgonPalette.surface)
-            .overlay { innerGlow }
-            .overlay {
-              // strokeBorder, not stroke: stroke straddles the path and spills
-              // half its width into the lip, filling the recess it is meant to
-              // sit inside.
-              faceShape.strokeBorder(
-                isActive ? tint.opacity(0.95) : ArgonPalette.hairline,
-                lineWidth: isActive ? 1 : 1
-              )
-            }
-            .padding(isActive ? inset : 0)
-        }
-      }
+      .background(isActive ? tint.opacity(inset > 3 ? 0.20 : 0.10) : Color.clear)
+      .overlay(
+        DraftFrame(overshoot: 6)
+          .stroke(isActive ? tint.opacity(0.7) : Argon.line, lineWidth: 1)
+          .allowsHitTesting(false)
+      )
       .animation(.easeOut(duration: 0.16), value: isActive)
-  }
-
-  private var faceShape: RoundedRectangle {
-    RoundedRectangle(cornerRadius: isActive ? faceRadius : cornerRadius, style: .continuous)
-  }
-
-  /// Light entering from the rim and falling off toward the middle.
-  ///
-  /// Three borders of increasing width and decreasing opacity, each blurred and
-  /// all clipped to the face. The clip is the whole trick: without it the blur
-  /// spills past the rim and becomes the outward halo this exists to avoid.
-  /// strokeBorder keeps every pass inside the face to begin with, so the mask
-  /// is trimming the blur rather than half the stroke.
-  @ViewBuilder
-  private var innerGlow: some View {
-    if isActive {
-      ZStack {
-        faceShape.strokeBorder(tint.opacity(0.85), lineWidth: 2).blur(radius: 2)
-        faceShape.strokeBorder(tint.opacity(0.40), lineWidth: 6).blur(radius: 6)
-        faceShape.strokeBorder(tint.opacity(0.16), lineWidth: 14).blur(radius: 12)
-      }
-      .mask(faceShape.fill())
-      .allowsHitTesting(false)
-    }
   }
 }
 
 extension View {
-  /// Light from the rim, inward. Use for a control that is live or chosen.
+  /// Blue outline and wash for a control that is live or chosen.
   func argonInsetGlow(
     _ isActive: Bool,
     cornerRadius: CGFloat = 12,
@@ -162,15 +107,13 @@ extension View {
   }
 
   /// Mark this as pickable, and show whether it is picked.
-  ///
-  /// Selection uses the same inward light as a live button, so "this one" looks
-  /// the same wherever it appears.
   func argonSelectable(_ isSelected: Bool, cornerRadius: CGFloat = 12) -> some View {
     argonInsetGlow(isSelected, cornerRadius: cornerRadius)
   }
 }
 
-/// A tappable chip that glows when chosen. The wizard's basic unit.
+/// A pickable row. The wizard's basic unit: the form's square checkbox, then
+/// the words.
 struct ArgonChoiceButton: View {
   let title: String
   var caption: String? = nil
@@ -179,10 +122,8 @@ struct ArgonChoiceButton: View {
 
   var body: some View {
     Button(action: action) {
-      HStack(spacing: 10) {
-        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-          .font(.body)
-          .foregroundStyle(isSelected ? ArgonPalette.electricBlue : ArgonPalette.mutedInk)
+      HStack(spacing: 12) {
+        DraftCheck(on: isSelected)
 
         VStack(alignment: .leading, spacing: 2) {
           Text(title)
@@ -211,10 +152,8 @@ struct ArgonChoiceButton: View {
 
 /// The primary action on a screen.
 ///
-/// Lit while it is actually actionable, dark while it is not, so "can I press
-/// this yet" is answered by looking rather than by pressing and seeing nothing
-/// happen. Pressing sinks it further rather than flashing a highlight — the
-/// control already reads as recessed, so going deeper is the honest gesture.
+/// Blue while it is actually actionable, a grey construction line while it is
+/// not, so "can I press this yet" is answered by looking.
 struct ArgonPrimaryButtonStyle: ButtonStyle {
   func makeBody(configuration: Configuration) -> some View {
     Face(configuration: configuration)
@@ -227,19 +166,16 @@ struct ArgonPrimaryButtonStyle: ButtonStyle {
     var body: some View {
       configuration.label
         .font(.callout.weight(.semibold))
-        .foregroundStyle(isEnabled ? ArgonPalette.ink : ArgonPalette.mutedInk)
+        .foregroundStyle(isEnabled ? Argon.accent : Argon.Tone.faint)
         .frame(maxWidth: .infinity)
         .frame(height: 50)
-        .argonInsetGlow(
-          isEnabled,
-          inset: configuration.isPressed ? 5 : 3
-        )
+        .argonInsetGlow(isEnabled, inset: configuration.isPressed ? 5 : 3)
     }
   }
 }
 
-/// A secondary action. Never lit, so it cannot be mistaken for the primary one
-/// at a glance even when both are available.
+/// A secondary action. Never blue, so it cannot be mistaken for the primary
+/// one at a glance even when both are available.
 struct ArgonSecondaryButtonStyle: ButtonStyle {
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
@@ -252,57 +188,43 @@ struct ArgonSecondaryButtonStyle: ButtonStyle {
   }
 }
 
-/// Kept so existing call sites compile, but reduced to a small status dot.
-///
-/// It used to be a 176pt animated orb with an orbit ring and a 3D float. On the
-/// dashboard it pushed the first task below the fold, which is a lot to pay for
-/// an ornament.
+/// Kept so existing call sites compile. It was a 176pt animated orb, then a
+/// tinted circle; now it is a registration mark — a small square drawn with
+/// draft corners around the running-task pulse.
 struct ArgonOrb: View {
   var size: CGFloat = 176
   var accentColor = ArgonPalette.electricBlue
   var showsOrbit = true
 
   var body: some View {
-    Circle()
-      .fill(accentColor.opacity(0.16))
-      .overlay {
-        Circle().stroke(accentColor.opacity(0.55), lineWidth: 1.5)
-      }
-      .frame(width: min(size, 44), height: min(size, 44))
-      .accessibilityHidden(true)
+    let side = min(size, 28)
+    ZStack {
+      DraftFrame(overshoot: 5).stroke(Argon.lineStrong, lineWidth: 1)
+      ArgonPulse(colour: accentColor)
+    }
+    .frame(width: side, height: side)
+    .padding(5)
+    .accessibilityHidden(true)
   }
 }
 
 private struct ArgonGlassPanelModifier: ViewModifier {
-  let cornerRadius: CGFloat
-  let strokeOpacity: Double
-
   func body(content: Content) -> some View {
     content
-      .background(
-        ArgonPalette.surface,
-        in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+      .overlay(
+        DraftFrame().stroke(Argon.line, lineWidth: 1).allowsHitTesting(false)
       )
-      .overlay {
-        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-          .stroke(ArgonPalette.hairline, lineWidth: 1)
-      }
   }
 }
 
 extension View {
-  /// Name kept; it is a plain slate card now. Nothing glass, no gradient
-  /// stroke, no drop shadow — a card's job is to group things, not to be seen.
+  /// Name kept; it is a draft box now — an outline with overshooting edges,
+  /// no fill. The overshoot is drawn outside the bounds, so leave it room.
   func argonGlassPanel(
     cornerRadius: CGFloat = 24,
     strokeOpacity: Double = 0.18
   ) -> some View {
-    modifier(
-      ArgonGlassPanelModifier(
-        cornerRadius: cornerRadius,
-        strokeOpacity: strokeOpacity
-      )
-    )
+    modifier(ArgonGlassPanelModifier())
   }
 }
 

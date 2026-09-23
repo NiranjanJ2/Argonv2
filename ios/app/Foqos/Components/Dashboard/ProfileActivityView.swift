@@ -11,21 +11,22 @@ struct ProfileActivityView: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
       Text(DateFormatters.formatDashboardDate(selectedDate))
-        .font(.subheadline)
-        .fontWeight(.medium)
+        .font(Argon.caption)
+        .foregroundStyle(Argon.Tone.secondary)
 
       VStack(alignment: .leading, spacing: 8) {
         ForEach(activities) { activity in
           profileActivityRow(for: activity)
 
           if activity.id != activities.last?.id {
-            Divider()
+            ArgonDivider()
           }
         }
       }
     }
-    .padding(.top, 8)
+    .padding(.top, 12)
     .padding(.horizontal, 16)
+    .overlay(alignment: .top) { ArgonDivider() }
     .padding(.bottom, 16)
     .transition(.move(edge: .bottom).combined(with: .opacity))
   }
@@ -33,16 +34,14 @@ struct ProfileActivityView: View {
   private func profileActivityRow(for activity: DashboardProfileActivity) -> some View {
     HStack(spacing: 12) {
       Text(activity.profile.name)
-        .font(.subheadline)
-        .fontWeight(.medium)
-        .foregroundColor(.primary)
+        .font(Argon.detail.weight(.medium))
+        .foregroundStyle(Argon.Tone.primary)
 
       Spacer()
 
       Text(DateFormatters.formatDurationShort(activity.totalTime))
-        .font(.subheadline)
-        .fontWeight(.medium)
-        .foregroundColor(.secondary)
+        .font(Argon.detail.monospacedDigit())
+        .foregroundStyle(Argon.Tone.secondary)
 
       Button {
         let context = DashboardInsightsContext(
@@ -59,12 +58,9 @@ struct ProfileActivityView: View {
             .font(.caption)
             .fontWeight(.medium)
         }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 6)
-        .background(
-          Capsule()
-            .fill(.tertiary)
-        )
+        .foregroundStyle(Argon.accent)
+        .frame(minHeight: 32)
+        .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
     }

@@ -24,6 +24,7 @@ let package = Package(
         "ArgonAppDelegate.swift",
         "ArgonBridge.swift",
         "ArgonChatView.swift",
+        "ArgonDraftExtras.swift",
         "ArgonLockReconciler.swift",
         "ArgonLockWindow.swift",
         "ArgonMetered.swift",

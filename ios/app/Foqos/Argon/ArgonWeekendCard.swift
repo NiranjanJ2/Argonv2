@@ -40,9 +40,13 @@ struct ArgonWeekendCard: View {
         .disabled(busy)
 
         if let error {
-          Label(error, systemImage: "exclamationmark.triangle.fill")
+          // Red only over its own wash.
+          Label(error, systemImage: "exclamationmark.triangle")
             .font(Argon.label).foregroundStyle(Argon.overdue)
             .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 8).padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Argon.overdue.opacity(0.10))
         }
 
         if isOn {

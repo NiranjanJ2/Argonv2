@@ -1,6 +1,6 @@
 import SwiftUI
 
-// A wrapper that places a tappable frosted-glass layer above its content.
+// A wrapper that places a tappable hatched cover above its content.
 // Users must tap the glass three times to shatter it, revealing and enabling
 // the underlying content (e.g., a button) to be interactive.
 struct BreakGlassButton<Content: View>: View {
@@ -50,7 +50,7 @@ struct BreakGlassButton<Content: View>: View {
           .scaleEffect(overlayScale)
           .rotationEffect(overlayRotation)
           .opacity(overlayOpacity)
-          .contentShape(RoundedRectangle(cornerRadius: 16))
+          .contentShape(Rectangle())
           .onAppear {
             overlayScale = 1.0
             overlayOpacity = 1.0
@@ -81,7 +81,7 @@ struct BreakGlassButton<Content: View>: View {
           )
           .allowsHitTesting(true)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .clipShape(Rectangle())
       }
     }
   }
@@ -112,69 +112,45 @@ struct BreakGlassButton<Content: View>: View {
 
 // MARK: - Overlay visuals
 
+/// The cover: a hatched panel, as a drawing marks a section that is closed
+/// off. It was frosted material with a shadow and a specular gradient sweep.
+/// The hatching thins as he taps, so progress still reads.
 private struct GlassOverlay: View {
   var size: CGSize
   var cracks: [CGPoint]
   var progress: Double  // 0...1 based on taps
   var isDark: Bool
 
-  private var borderColor: Color {
-    isDark ? Color.white.opacity(0.35) : Color.black.opacity(0.2)
-  }
-
-  private var specularScale: Double {
-    isDark ? 1.0 : 1.25
-  }
-
-  private var materialStyle: Material {
-    isDark ? .ultraThinMaterial : .thinMaterial
-  }
-
-  private var shadowColor: Color {
-    isDark ? Color.black.opacity(0.08) : Color.black.opacity(0.14)
-  }
-
-  private var borderLineWidth: CGFloat {
-    isDark ? 1 : 1.2
-  }
-
   var body: some View {
     ZStack {
-      RoundedRectangle(cornerRadius: 16)
-        .fill(materialStyle)
-        .overlay(
-          // Soft border
-          RoundedRectangle(cornerRadius: 16)
-            .stroke(borderColor, lineWidth: borderLineWidth)
-        )
-        // Subtle inner highlight for light mode to increase edge definition
-        .overlay(
-          RoundedRectangle(cornerRadius: 16)
-            .stroke(Color.white.opacity(isDark ? 0.0 : 0.18), lineWidth: 0.6)
-            .blendMode(.plusLighter)
-        )
-        .shadow(color: shadowColor, radius: isDark ? 8 : 10, x: 0, y: isDark ? 4 : 6)
+      Rectangle().fill(Argon.Ink.base.opacity(0.9))
 
-      // Subtle specular highlight sweep tied to progress
-      RoundedRectangle(cornerRadius: 16)
-        .fill(
-          LinearGradient(
-            colors: [
-              Color.white.opacity(0.08 * (1.0 - progress) * specularScale),
-              Color.white.opacity(0.24 * (1.0 - progress) * specularScale),
-              Color.white.opacity(0.08 * (1.0 - progress) * specularScale),
-            ],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-          )
-        )
-        .blendMode(.plusLighter)
+      Path { p in
+        // 45° hatching, 7pt apart, across the whole panel.
+        let step: CGFloat = 7
+        var x = -size.height
+        while x < size.width {
+          p.move(to: CGPoint(x: x, y: size.height))
+          p.addLine(to: CGPoint(x: x + size.height, y: 0))
+          x += step
+        }
+      }
+      .stroke(Argon.lineStrong.opacity(1.0 - progress * 0.6), lineWidth: 1)
+      .clipped()
+
+      Text("Tap to uncover")
+        .font(Argon.caption)
+        .foregroundStyle(Argon.Tone.secondary)
+        .padding(.horizontal, 8).padding(.vertical, 3)
+        .background(Argon.Ink.base)
+        .opacity(1.0 - progress)
 
       // Cracks
       CrackCanvas(size: size, origins: cracks, isDark: isDark)
         .allowsHitTesting(false)
         .opacity(min(1, progress * 1.2))
     }
+    .overlay(DraftFrame(overshoot: 0).stroke(Argon.lineStrong, lineWidth: 1))
   }
 }
 
@@ -226,20 +202,13 @@ private struct CrackCanvas: View {
           }
 
           // Crack color adapts to scheme: brighter in dark mode, slightly darker in light mode
-          let strokeColor: Color = isDark ? Color.white.opacity(0.9) : Color.black.opacity(0.6)
+          let strokeColor: Color = Argon.Tone.primary.opacity(0.85)
           context.stroke(
             path,
             with: .color(strokeColor),
             style: StrokeStyle(lineWidth: 0.8, lineCap: .round, lineJoin: .round)
           )
 
-          // Subtle inner shadow to enhance depth
-          let shadowPath = path
-          context.stroke(
-            shadowPath,
-            with: .color(isDark ? Color.black.opacity(0.35) : Color.black.opacity(0.18)),
-            style: StrokeStyle(lineWidth: 0.4)
-          )
         }
       }
     }
@@ -275,49 +244,10 @@ private func triggerSuccessHaptic() {
 }
 
 #Preview {
-  VStack(spacing: 20) {
-    BreakGlassButton(
-      tapsToShatter: 3,
-      onUnlocked: {
-        print("Unlocked 1")
-      }
-    ) {
-      // Your own button/content
-      Button(action: { print("Primary action") }) {
-        HStack(spacing: 8) {
-          Image(systemName: "lock.open")
-          Text("Protected Action")
-        }
-        .padding(.vertical, 12)
-        .padding(.horizontal, 20)
-        .background(
-          RoundedRectangle(cornerRadius: 16)
-            .fill(.thinMaterial)
-            .overlay(
-              RoundedRectangle(cornerRadius: 16)
-                .stroke(Color.green.opacity(0.25), lineWidth: 1)
-            )
-        )
-      }
-      .buttonStyle(.plain)
-    }
-    .frame(height: 56)
-
-    BreakGlassButton(tapsToShatter: 3, onUnlocked: { print("Glass shattered: ready") }) {
-      Button("Begin Session") { print("Begin Session tapped") }
-        .padding(.vertical, 12)
-        .padding(.horizontal, 20)
-        .background(
-          RoundedRectangle(cornerRadius: 16)
-            .fill(.thinMaterial)
-            .overlay(
-              RoundedRectangle(cornerRadius: 16)
-                .stroke(Color.blue.opacity(0.25), lineWidth: 1)
-            )
-        )
-    }
-    .frame(height: 56)
+  BreakGlassButton(tapsToShatter: 3, onUnlocked: {}) {
+    ActionButton(title: "Emergency Unblock", backgroundColor: .red) {}
   }
+  .frame(height: 62)
   .padding()
-  .background(Color(.systemGroupedBackground))
+  .argonAmbience()
 }

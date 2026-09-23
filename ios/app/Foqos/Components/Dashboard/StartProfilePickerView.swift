@@ -49,7 +49,10 @@ struct StartProfilePickerView: View {
           .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
           ScrollView {
-            VStack(spacing: 10) {
+            VStack(spacing: Argon.overshoot * 2) {
+              DraftSectionLabel(title: "Start a profile")
+                .frame(maxWidth: .infinity, alignment: .leading)
+
               if isBlocking {
                 activeSessionNotice
               }
@@ -68,14 +71,15 @@ struct StartProfilePickerView: View {
                 )
               }
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, Argon.margin)
             .padding(.vertical, 12)
           }
         }
 
         goButton
       }
-      .padding(.top, 30)
+      .padding(.top, 18)
+      .argonAmbience()
 
       .onChange(of: profiles) { _, newProfiles in
         if selectedProfile == nil {
@@ -96,35 +100,31 @@ struct StartProfilePickerView: View {
 
   private var activeSessionNotice: some View {
     HStack(spacing: 10) {
-      Image(systemName: "lock.fill")
-        .foregroundStyle(themeManager.themeColor)
+      Image(systemName: "lock")
+        .foregroundStyle(Argon.accent)
 
       Text("A profile is already active. Stop it before starting another one.")
-        .font(.subheadline)
-        .foregroundStyle(.secondary)
+        .font(Argon.detail)
+        .foregroundStyle(Argon.Tone.secondary)
         .fixedSize(horizontal: false, vertical: true)
 
       Spacer(minLength: 0)
     }
     .padding(14)
-    .background(
-      RoundedRectangle(cornerRadius: 14, style: .continuous)
-        .fill(Color(.secondarySystemGroupedBackground))
-    )
+    .draftBox(stroke: Argon.accent.opacity(0.55), fill: Argon.accent.opacity(0.06))
   }
 
   private var goButton: some View {
     VStack(spacing: 8) {
       ShimmerLauncherButton(
         title: "Go",
-        imageName: "RacingFlagStickerIcon",
-        height: 64,
+        height: 56,
         isEnabled: canGo,
         accessibilityLabel: "Start selected profile",
         action: goTapped
       )
     }
-    .padding(.horizontal, 16)
+    .padding(.horizontal, Argon.margin)
     .padding(.top, 10)
     .padding(.bottom, 16)
   }
@@ -142,15 +142,7 @@ private struct PickerRowButtonStyle: ButtonStyle {
 
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
-      .scaleEffect(configuration.isPressed ? 0.97 : (isSelected ? 1.015 : 1))
-      .animation(
-        .spring(response: 0.22, dampingFraction: 0.72),
-        value: configuration.isPressed
-      )
-      .animation(
-        .spring(response: 0.28, dampingFraction: 0.78),
-        value: isSelected
-      )
+      .opacity(configuration.isPressed ? 0.7 : 1)
   }
 }
 
@@ -170,22 +162,12 @@ private struct StartProfilePickerRow: View {
         metadata: .appsAndDomains,
         showsStatusLine: true
       ) {
-        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-          .font(.system(size: 22, weight: .semibold))
-          .foregroundStyle(isSelected ? themeManager.themeColor : .secondary.opacity(0.5))
+        DraftCheck(on: isSelected)
       }
       .padding(14)
-      .background(
-        RoundedRectangle(cornerRadius: 16, style: .continuous)
-          .fill(Color(.secondarySystemGroupedBackground))
-          .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-              .strokeBorder(
-                isSelected ? themeManager.themeColor.opacity(0.45) : Color.primary.opacity(0.06),
-                lineWidth: isSelected ? 2 : 1
-              )
-          )
-      )
+      .draftBox(stroke: isSelected ? Argon.accent.opacity(0.7) : Argon.line,
+                fill: isSelected ? Argon.accent.opacity(0.08) : .clear)
+      .contentShape(Rectangle())
     }
     .buttonStyle(PickerRowButtonStyle(isSelected: isSelected))
     .animation(.spring(response: 0.28, dampingFraction: 0.78), value: isSelected)

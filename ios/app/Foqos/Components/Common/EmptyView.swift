@@ -11,13 +11,13 @@ struct EmptyView: View {
       Image(systemName: iconName)
         .resizable()
         .aspectRatio(contentMode: .fit)
-        .frame(width: 100, height: 100)
-        .foregroundColor(.gray)
+        .frame(width: 44, height: 44)
+        .foregroundStyle(Argon.Tone.faint)
 
       Text(headingText)
-        .font(.headline)
+        .font(Argon.body)
         .multilineTextAlignment(.center)
-        .foregroundColor(.secondary)
+        .foregroundStyle(Argon.Tone.secondary)
         .padding()
 
       Spacer()

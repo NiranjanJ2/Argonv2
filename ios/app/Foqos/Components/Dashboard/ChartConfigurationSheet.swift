@@ -6,64 +6,57 @@ struct ChartConfigurationSheet: View {
   @Binding var chartType: HabitChartType
   let onDismiss: () -> Void
 
+  private func label(_ title: String) -> some View {
+    Text(title).font(Argon.caption).foregroundStyle(Argon.Tone.secondary)
+      .draftLabelRow()
+  }
+
   var body: some View {
     NavigationStack {
       List {
-        Section("Visibility") {
-          Toggle("Show Chart", isOn: $showHabitTracker)
-            .tint(themeManager.themeColor)
-        }
-        .listRowInsets(EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 16))
+        label("Visibility")
+        Toggle("Show chart", isOn: $showHabitTracker)
+          .font(Argon.body)
+          .foregroundStyle(Argon.Tone.primary)
+          .padding(.vertical, 12)
+          .draftRow(.single)
 
-        Section("Chart Type") {
-          ForEach(HabitChartType.allCases, id: \.self) { type in
-            Button {
-              chartType = type
-            } label: {
-              HStack(alignment: .top, spacing: 12) {
-                ZStack {
-                  Circle()
-                    .stroke(
-                      chartType == type ? themeManager.themeColor : Color.gray.opacity(0.4),
-                      lineWidth: 2
-                    )
-                    .frame(width: 22, height: 22)
-
-                  if chartType == type {
-                    Circle()
-                      .fill(themeManager.themeColor)
-                      .frame(width: 12, height: 12)
-                  }
-                }
+        label("Chart type")
+        let types = HabitChartType.allCases
+        ForEach(Array(types.enumerated()), id: \.element) { i, type in
+          Button {
+            chartType = type
+          } label: {
+            HStack(alignment: .top, spacing: 12) {
+              DraftCheck(on: chartType == type)
                 .padding(.top, 2)
 
-                VStack(alignment: .leading, spacing: 4) {
-                  HStack(spacing: 8) {
-                    Image(systemName: type.icon)
-                      .foregroundStyle(themeManager.themeColor)
-                      .font(.system(size: 16))
-
-                    Text(type.rawValue)
-                      .font(.system(size: 16, weight: .medium))
-                      .foregroundStyle(.primary)
-                  }
-
-                  Text(type.description)
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                }
-
-                Spacer()
+              VStack(alignment: .leading, spacing: 4) {
+                Text(type.rawValue)
+                  .font(Argon.body.weight(.medium))
+                  .foregroundStyle(Argon.Tone.primary)
+                Text(type.description)
+                  .font(Argon.label)
+                  .foregroundStyle(Argon.Tone.secondary)
+                  .multilineTextAlignment(.leading)
+                  .fixedSize(horizontal: false, vertical: true)
               }
-              .padding(.vertical, 4)
+
+              Spacer()
             }
-            .buttonStyle(.plain)
-            .listRowSeparator(.hidden)
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
           }
+          .buttonStyle(.plain)
+          .draftRow(.of(i, in: types.count),
+                    fill: chartType == type ? Argon.accent.opacity(0.06) : .clear)
         }
       }
+      .listStyle(.plain)
+      .scrollContentBackground(.hidden)
+      .environment(\.defaultMinListRowHeight, 0)
+      .argonAmbience()
+      .tint(Argon.accent)
       .navigationTitle("Manage chart")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
