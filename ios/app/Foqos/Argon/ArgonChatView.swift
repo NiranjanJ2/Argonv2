@@ -11,7 +11,12 @@ struct ArgonChatView: View {
         ScrollView {
           LazyVStack(alignment: .leading, spacing: 12) {
             if store.messages.isEmpty { empty }
-            ForEach(store.messages) { ArgonBubble(message: $0).id($0.id) }
+            ForEach(store.messages) { message in
+              ArgonBubble(message: message, tasks: store.state.tasks) { action in
+                Task { await store.perform(action) }
+              }
+              .id(message.id)
+            }
             if store.awaitingReply { ArgonTyping().id("typing") }
           }
           .padding(.horizontal, 18).padding(.vertical, 14)
@@ -45,6 +50,16 @@ struct ArgonChatView: View {
       composer
     }
     .refreshable { await store.refresh() }
+    // An `argon:` link inside a sentence is prose, not a button row, but it is
+    // still a link: without this, iOS tries to open the scheme and nothing
+    // happens. Same path as the buttons; every other scheme opens as usual.
+    .environment(\.openURL, OpenURLAction { url in
+      guard url.scheme == "argon" else { return .systemAction }
+      if let action = ArgonAction(label: "", url: url.absoluteString) {
+        Task { await store.perform(action) }
+      }
+      return .handled
+    })
     .argonAmbience(ticking: store.state.ticking)
     .task { await store.markRead() }
     .toolbar {
@@ -156,12 +171,15 @@ struct ArgonTyping: View {
 
 struct ArgonBubble: View {
   let message: ArgonMessage
+  /// The board, so Argon's buttons know whether they can act.
+  var tasks: [ArgonTask] = []
+  var onAction: ((ArgonAction) -> Void)? = nil
 
   var body: some View {
     HStack {
       if !message.isFromArgon { Spacer(minLength: 44) }
       VStack(alignment: message.isFromArgon ? .leading : .trailing, spacing: 4) {
-        Text(attributed)
+        content
           .font(Argon.body)
           .textSelection(.enabled)
           .foregroundStyle(message.isFromArgon ? Argon.Tone.primary : Color.white)
@@ -195,12 +213,14 @@ struct ArgonBubble: View {
     }
   }
 
-  /// Argon writes markdown. Falling back to the raw string keeps a malformed
-  /// message readable instead of blank.
-  private var attributed: AttributedString {
-    (try? AttributedString(
-      markdown: message.text,
-      options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
-      ?? AttributedString(message.text)
+  /// Only Argon writes markdown. What he typed is shown as typed: an
+  /// asterisk or a `- [ ]` in his own message is not a request for styling.
+  @ViewBuilder private var content: some View {
+    if message.isFromArgon {
+      ArgonRichText(text: message.text, messageID: message.id,
+                    tasks: tasks, onAction: onAction)
+    } else {
+      Text(verbatim: message.text)
+    }
   }
 }
