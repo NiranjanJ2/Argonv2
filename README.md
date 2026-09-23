@@ -42,7 +42,7 @@ Three things follow, and they are the whole design:
 
 **The prompt cache works by construction.** Rows are immutable and only ever
 appended, so everything before the last spoken turn is byte-identical from one
-tick to the next. Cached input is $0.02/M against $0.20/M fresh; at a
+tick to the next. Cached input is $0.01/M against $0.10/M fresh on gpt-6-luna; at a
 five-minute cadence that is ~$3/month instead of ~$11. `context.py`'s self-check
 asserts the prefix does not drift, because it breaks silently and you find out
 on a bill.
@@ -84,7 +84,7 @@ argon/
   context.py      transcript -> messages, cache-shaped
   schedule.py     when to look (cost only, never content)
   agent.py        the turn: build, ask, run tools
-  provider.py     OpenAI-compatible, stdlib, raises instead of returning errors
+  provider.py     OpenAI Responses API, stdlib, raises instead of returning errors
   budget.py       hard monthly ceiling, announced once
   store.py        tasks and durable facts; every mutation is also an event
   tools.py        the registry, and `say`

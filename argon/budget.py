@@ -24,13 +24,20 @@ from dataclasses import dataclass
 
 from argon import clock, config
 
-#: dollars per million tokens: (input, output, cached input)
+#: dollars per million tokens: (input, output, cached input). Checked against
+#: developers.openai.com/api/docs/pricing on 2026-09-22.
 PRICES: dict[str, tuple[float, float, float]] = {
-    "gpt-5.6-luna": (0.20, 1.20, 0.02),
+    "gpt-6-luna": (0.10, 0.50, 0.01),
+    "gpt-5.6-luna": (0.20, 0.75, 0.02),
     "gpt-5.6-terra": (1.25, 10.00, 0.125),
     "gpt-5.6-sol": (5.00, 40.00, 0.50),
     "gpt-5-mini": (0.25, 2.00, 0.025),
 }
+
+#: GPT-5.6 and later bill the first write of a cached prefix at this multiple of
+#: the fresh input rate. Not an extra fee: those tokens are billed at this rate
+#: *instead of* the fresh one.
+CACHE_WRITE_MULTIPLIER = 1.25
 
 #: Warn in the log once past this fraction of the cap.
 WARN_AT = 0.80
@@ -45,6 +52,8 @@ class Usage:
     prompt: int = 0
     completion: int = 0
     cached: int = 0
+    #: Tokens written into the prompt cache on this call (part of ``prompt``).
+    written: int = 0
 
 
 def price_of(model: str) -> tuple[float, float, float] | None:
@@ -60,9 +69,10 @@ def cost_of(model: str, usage: Usage) -> float:
     """What one call cost. An unlisted model is charged at the highest known
     rate rather than nothing — see UNKNOWN_MODEL_RATES."""
     fresh_in, out, cached_in = price_of(model) or UNKNOWN_MODEL_RATES
-    fresh = max(0, usage.prompt - usage.cached)
+    fresh = max(0, usage.prompt - usage.cached - usage.written)
     return (
         fresh * fresh_in / 1e6
+        + usage.written * fresh_in * CACHE_WRITE_MULTIPLIER / 1e6
         + usage.cached * cached_in / 1e6
         + usage.completion * out / 1e6
     )
@@ -205,8 +215,14 @@ def _selftest() -> None:
         # Cached input is 10x cheaper; that ratio is the whole cost model.
         fresh = cost_of("gpt-5.6-luna", Usage(prompt=18_000, completion=150))
         warm = cost_of("gpt-5.6-luna", Usage(prompt=18_000, completion=150, cached=13_000))
-        assert abs(fresh - 0.00378) < 1e-5, fresh
+        assert abs(fresh - 0.0037125) < 1e-7, fresh
         assert warm < fresh / 2, (warm, fresh)
+        # Writing the cache costs more than not caching, once: 1.25x on the
+        # written part, then a tenth of the price on every tick that reuses it.
+        wrote = cost_of("gpt-6-luna", Usage(prompt=6_000, written=6_000))
+        assert abs(wrote - 6_000 * 0.125 / 1e6) < 1e-9, wrote
+        reused = cost_of("gpt-6-luna", Usage(prompt=6_000, cached=6_000))
+        assert abs(reused - 6_000 * 0.01 / 1e6) < 1e-9, reused
 
         # An unlisted model is charged at the dearest known rate, not zero.
         # Charging zero made a one-character typo in config.json silently

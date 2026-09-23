@@ -85,7 +85,7 @@ class Provider:
 
     api_key: str = ""
     api_base: str = "https://api.openai.com/v1"
-    model: str = "gpt-5.6-luna"
+    model: str = "gpt-6-luna"
     #: Used when the primary returns a retryable failure.  Keep it on the same
     #: provider: pinning a background model to a *different* one is what caused
     #: a week-long silent outage when that model was retired and chat kept

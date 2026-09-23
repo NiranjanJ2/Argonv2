@@ -100,6 +100,12 @@ class Agent:
 
             out.cost += reply.cost
             out.steps = step + 1
+            if reply.fell_back:
+                # A config error on the primary used to look exactly like the
+                # primary working. Once per turn is enough to be seen.
+                if step == 0:
+                    self.t.append("provider_fallback",
+                                  summary=f"answered by {reply.model}; {reply.fell_back}"[:300])
 
             if not reply.tool_calls:
                 out.text = reply.text
@@ -119,6 +125,10 @@ class Agent:
                 "role": "assistant",
                 "content": reply.text or None,
                 "tool_calls": reply.tool_calls,
+                # The provider's own output, reasoning included, replayed as-is
+                # on the next step. Lives only in this turn's list; the
+                # transcript never stores it.
+                "_items": reply.items,
             })
             for call_id, name, args in parse_calls(reply.tool_calls):
                 result = self.tools.call(name, args, background=background)

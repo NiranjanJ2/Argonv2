@@ -113,6 +113,29 @@ def _section(label: str, work) -> None:
         print(f"{'':15s}{line}")
 
 
+def _probe_model(cfg) -> str:
+    """One real call with a tool attached, shaped like every Argon turn.
+
+    The config line above only says what is *configured*. From 2026-09-21 every
+    turn 400'd on the primary (tools plus reasoning_effort) and fell back to
+    gpt-5-mini, and nothing anywhere said so. Costs a fraction of a cent.
+    """
+    from argon import provider
+
+    ping = [{"type": "function", "function": {
+        "name": "ping", "description": "Answer ping.",
+        "parameters": {"type": "object", "properties": {}}}}]
+    try:
+        r = provider.complete(cfg.provider, [{"role": "user", "content": "Call ping."}],
+                              tools=ping, cap=cfg.monthly_cap_usd, attempts=1)
+    except Exception as e:  # noqa: BLE001 — doctor reports, never raises
+        return f"FAILED: {e}"[:300]
+    tool = "tool call ok" if r.tool_calls else "NO TOOL CALL"
+    if r.fell_back:
+        return f"FELL BACK to {r.model}, {tool}\nprimary: {r.fell_back}"[:400]
+    return f"{r.model}, {tool}"
+
+
 def cmd_doctor(args) -> int:
     """Check the things that have actually broken before."""
     from argon.integrations.google import capabilities, status
@@ -136,6 +159,7 @@ def cmd_doctor(args) -> int:
 
     print(f"provider       {cfg.provider.model} at {cfg.provider.api_base} "
           f"(key: {'set' if cfg.provider.api_key else 'MISSING'})")
+    _section("model call", lambda: _probe_model(cfg))
 
     _section("google", lambda: status(cfg.google_accounts))
     _section("routing", lambda: "\n".join(
