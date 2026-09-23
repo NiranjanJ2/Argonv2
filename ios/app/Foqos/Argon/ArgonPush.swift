@@ -27,7 +27,11 @@ final class ArgonPush: NSObject, UNUserNotificationCenterDelegate {
   func requestAuthorisation() async {
     let centre = UNUserNotificationCenter.current()
     guard let granted = try? await centre.requestAuthorization(options: [.alert, .sound, .badge]),
-          granted else { return }
+          granted else {
+      ArgonLog.note("push", "permission refused")
+      return
+    }
+    ArgonLog.note("push", "permission granted, registering")
     UIApplication.shared.registerForRemoteNotifications()
   }
 
@@ -37,6 +41,11 @@ final class ArgonPush: NSObject, UNUserNotificationCenterDelegate {
   func resumeAtLaunch() async {
     let status = await UNUserNotificationCenter.current().notificationSettings()
       .authorizationStatus
+    // The server has never received a token from v2 and nothing on the phone
+    // said why — every step here used print(). These lines reach the server
+    // with the next refresh, so the break shows up in the transcript.
+    let stored = UserDefaults.standard.string(forKey: Self.tokenKey) != nil
+    ArgonLog.note("push", "launch: permission \(status.rawValue), token \(stored ? "stored" : "none")")
     if status == .authorized || status == .provisional || status == .ephemeral {
       UIApplication.shared.registerForRemoteNotifications()
     }
@@ -46,6 +55,7 @@ final class ArgonPush: NSObject, UNUserNotificationCenterDelegate {
   /// Called from the app delegate with the raw token data.
   func registered(deviceToken: Data) {
     let hex = deviceToken.map { String(format: "%02x", $0) }.joined()
+    ArgonLog.note("push", "iOS gave a token \(hex.prefix(8))…")
     UserDefaults.standard.set(hex, forKey: "argon.deviceToken")
     UserDefaults.standard.removeObject(forKey: Self.receiptKey)
     Task { await syncToken() }
@@ -82,15 +92,16 @@ final class ArgonPush: NSObject, UNUserNotificationCenterDelegate {
       try await client.register(deviceToken: hex)
       defaults.set(identity, forKey: Self.receiptKey)
       defaults.removeObject(forKey: "argon.deviceTokenSynced")
+      ArgonLog.note("push", "server took the token")
     } catch {
-      print("[argon] device registration deferred: \(error.localizedDescription)")
+      ArgonLog.note("push", "register failed: \(error.localizedDescription)")
     }
   }
 
   func registrationFailed(_ error: Error) {
     // Logged, not surfaced: he can do nothing about it from the phone, and a
     // banner about push failing is exactly the noise this rewrite removes.
-    print("[argon] push registration failed: \(error.localizedDescription)")
+    ArgonLog.note("push", "iOS refused to register: \(error.localizedDescription)")
   }
 
   /// A silent push means "come and look" — never a payload to display. The
