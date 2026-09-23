@@ -15,8 +15,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/app"
 
-# Not secrets — the .p8 is, and it never leaves ~/.appstoreconnect.
-ASC_KEY_ID=6H2KYZJK9C
+# Not secrets — the .p8 is, and it never leaves ~/.appstoreconnect. The key
+# must have the Admin role: cloud distribution signing refuses anything less.
+ASC_KEY_ID=LFJV5A3K4Y
 ASC_ISSUER=d067d6f1-4488-4ea2-912a-cc44d1dce353
 ASC_KEY="$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
 
@@ -42,7 +43,7 @@ PLIST
     -exportPath "$out" -allowProvisioningUpdates \
     -authenticationKeyPath "$ASC_KEY" -authenticationKeyID "$ASC_KEY_ID" \
     -authenticationKeyIssuerID "$ASC_ISSUER" 2>&1 \
-    | grep -E 'error:|Upload|EXPORT|Progress' || true
+    | grep -E 'error:|Upload succeeded|EXPORT' || true
 }
 
 if [ "${1:-}" = "--upload" ]; then
