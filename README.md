@@ -89,6 +89,7 @@ argon/
   store.py        tasks and durable facts; every mutation is also an event
   tools.py        the registry, and `say`
   bell.py         Whitney schedules (the one thing carried from v1)
+  planner.py      the 4 PM sheet and the evening routine the phone arms
   runtime.py      the object graph and the tick loop
   api.py          frozen /v1 for the current app, clean /v2 for the new one
   channels.py     Discord

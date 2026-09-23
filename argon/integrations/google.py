@@ -512,11 +512,15 @@ def recent_materials(account: str, days_back: int = MATERIAL_DAYS_BACK,
                 at = _parse_rfc3339(item.get("updateTime") or item.get("creationTime"))
                 if at is None or at < floor:
                     continue
-                body = " ".join(titler(item).split())
+                raw = titler(item)
+                body = " ".join(raw.split())
                 if not body:
                     continue
+                # `text` keeps the line breaks. The planner reads AP Lang's
+                # "HW:" block as numbered lines, and the flattened, truncated
+                # `title` loses both the lines and, on a long post, the block.
                 out.append({"course": tidy_course(name), "kind": kind,
-                            "title": body[:300], "at": at})
+                            "title": body[:300], "text": raw[:4000], "at": at})
     # Materials first, then recency. A material is a teacher posting the day's
     # actual work; an announcement is usually a club or the counselling office.
     # Sorted by recency alone, one busy day of "PSAT registration!" pushes AP

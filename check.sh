@@ -7,7 +7,7 @@ python="${PYTHON:-.venv/bin/python}"
 [ -x "$python" ] || python="python3"
 
 modules=(clock transcript context schedule config budget provider store tools
-         agent bell channels runtime api integrations.google integrations.push
+         agent bell planner channels runtime api integrations.google integrations.push
          integrations.ac)
 
 fail=0

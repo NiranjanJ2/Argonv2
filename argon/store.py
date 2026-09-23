@@ -695,6 +695,33 @@ class Store:
             self._db.commit()
         self._t.append("stand_down_cleared")
 
+    # -- plain settings ---------------------------------------------------
+    def setting(self, key: str, default: Any = None) -> Any:
+        """A JSON value from the settings table, or *default*.
+
+        No transcript event on read or write: callers that change something
+        he would care about (the planner) append their own row saying what it
+        meant, which reads better in the model's context than a key dump.
+        A corrupt value reads as missing rather than raising, so one bad row
+        cannot take down /v2/state.
+        """
+        with self._lock:
+            row = self._db.execute(
+                "SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+        if row is None:
+            return default
+        try:
+            return json.loads(row["value"])
+        except json.JSONDecodeError:
+            return default
+
+    def put_setting(self, key: str, value: Any) -> None:
+        with self._lock:
+            self._db.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                (key, json.dumps(value)))
+            self._db.commit()
+
 
 def _due_phrase(due: str) -> str:
     """``Wed 09-16 (today)`` / ``Tue 08-25 (21 days overdue)``."""
@@ -970,6 +997,13 @@ def _selftest() -> None:
         migrated = Store(legacy, t)
         assert [x.title for x in migrated.tasks()] == ["Older task"]
         assert migrated.add_task("New", source="classroom", external_id="cw-1").external_id == "cw-1"
+
+        # Plain settings round-trip JSON, and a corrupt row reads as missing.
+        assert s.setting("nope", {"d": 1}) == {"d": 1}
+        s.put_setting("planner", {"last_planned": "2026-09-14"})
+        assert s.setting("planner")["last_planned"] == "2026-09-14"
+        s._db.execute("INSERT OR REPLACE INTO settings VALUES ('bad', '{')")
+        assert s.setting("bad", "fallback") == "fallback"
 
     print("store selftest ok")
 

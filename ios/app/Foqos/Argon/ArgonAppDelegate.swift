@@ -7,9 +7,9 @@ import UIKit
 /// app's `body`.
 ///
 /// The evening block itself is not started here: `ArgonRoutineActivity` is a
-/// Foqos `TimerActivity`, scheduled through the profile system, and it fires in
-/// the monitor extension with the app closed. Nothing in this file needs to be
-/// running for it to work.
+/// Foqos `TimerActivity`, armed by `ArgonRoutineScheduler` whenever fresh state
+/// lands, and it fires in the monitor extension with the app closed. Nothing in
+/// this file needs to be running for it to work.
 ///
 /// Three things wake the app, none of them a timer:
 /// - he brings it forward (`scenePhase` in `ArgonRootView`)
@@ -72,6 +72,15 @@ final class ArgonAppDelegate: NSObject, UIApplicationDelegate {
         guard let self else { return }
         ArgonLockReconciler.reconcile(self.store.state.lock,
                                       context: container.mainContext)
+        // Tonight's block, armed with the system. Same hook for the same
+        // reason: every wake path ends here, and the scheduler compares
+        // before it acts. Skipped until setup has produced a profile — there
+        // is nothing to block with, and arming against a profile the
+        // extension cannot find fires into nothing.
+        if let routine = self.store.state.routine,
+           let profile = ArgonLockReconciler.profile(in: container.mainContext) {
+          ArgonRoutineScheduler.apply(routine, profileId: profile.id)
+        }
       }
     }
   }
