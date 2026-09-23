@@ -675,7 +675,7 @@ class Runtime:
         t.add("say", "Send Niranjan a message. This is the only way to reach him.",
               self.agent.say,
               params={"text": {"type": "string", "description": "exactly what he receives"}},
-              required=["text"])
+              required=["text"], interactive=False)
 
         t.add("list_tasks", "The open task board with ids.",
               lambda: "\n".join(f"[{x.id}] {x.line()}" for x in store.tasks())

@@ -41,6 +41,11 @@ class Tool:
     #: things he says; a background tick claiming he started is a claim it
     #: cannot make.
     background: bool = True
+    #: False means unprompted turns only. `say` is the one: when he asked, the
+    #: reply text *is* the answer, and offering `say` as well produced two and
+    #: three messages for one question ("Marked InQuizitive done." then "Nice —
+    #: I marked InQuizitive done."). The prompt already told it not to.
+    interactive: bool = True
 
     #: True when the result carries text other people wrote — a Classroom
     #: assignment title, a mail subject, a calendar summary. Anyone who can
@@ -77,7 +82,7 @@ class Tools:
 
     def schemas(self, *, background: bool) -> list[dict[str, Any]]:
         return [t.schema() for t in self._tools.values()
-                if t.background or not background]
+                if (t.background if background else t.interactive)]
 
     def names(self) -> list[str]:
         return sorted(self._tools)
@@ -92,6 +97,9 @@ class Tools:
             return f"Error: no tool named {name!r}. Available: {', '.join(self.names())}"
         if background and not tool.background:
             return f"Error: {tool.name} is not available on an unprompted turn."
+        if not background and not tool.interactive:
+            return (f"Error: {tool.name} is not used when he asked — your reply "
+                    "text is delivered to him. Answer in the reply.")
         try:
             result = tool.run(**args)
         except TypeError as e:
@@ -157,6 +165,11 @@ def _selftest() -> None:
         assert tools.call("start", {}, background=False) == "started"
         assert "start" not in [s["function"]["name"] for s in tools.schemas(background=True)]
         assert "start" in [s["function"]["name"] for s in tools.schemas(background=False)]
+        tools.add("say", "speak", lambda text: "sent", interactive=False)
+        assert "say" in [s["function"]["name"] for s in tools.schemas(background=True)]
+        assert "say" not in [s["function"]["name"] for s in tools.schemas(background=False)], \
+            "when he asked, the reply is the message; say on top of it sends two"
+        assert tools.call("say", {"text": "x"}, background=False).startswith("Error")
 
         # A dirtied name still resolves.
         assert tools.call("say<|channel|>commentary", {"text": "x"}, background=True) == "sent"
