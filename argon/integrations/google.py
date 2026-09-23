@@ -618,14 +618,15 @@ def classroom_due(coursework: dict[str, Any]) -> datetime | None:
 
 
 #: Classes that take the work in class on the date Classroom shows, whatever
-#: time Classroom attaches. Math and Japanese post "11:59 PM" but collect at the
-#: start of the lesson, so the work is the night before. His list, carried from
-#: v1's CLASS_DUE_OFFSETS_DAYS; matched as a substring of the course name.
+#: time Classroom attaches. Math, Japanese and AP Lang post "11:59 PM" but
+#: collect at the start of the lesson, so the work is the night before. His
+#: list (Lang added 09-22), carried from v1's CLASS_DUE_OFFSETS_DAYS; matched as
+#: a substring of the course name.
 #:
 #: The 09-22 rewrite keyed this on deadline *shape* instead (date-only means the
 #: night before). His Math and Japanese work is never date-only — every item
 #: comes back at 23:59 — so the rule never fired for the two classes it was for.
-COLLECTED_IN_CLASS = ("math analysis", "japanese")
+COLLECTED_IN_CLASS = ("math analysis", "japanese", "english lang")
 
 #: A deadline before this hour is met by working the evening before: 08:30 test
 #: corrections, AI's 00:01 exercises. School is out by 15:36 on a regular day.
@@ -749,6 +750,8 @@ def _selftest() -> None:
             "HW 23 is collected in Wednesday's lesson, so it is Tuesday night's work"
         assert classroom_task_date(eleven59(24), "Japanese 4 & AP") == "2026-09-23", \
             "Japanese collects in class too"
+        assert classroom_task_date(eleven59(25), "AP English Lang-Han") == "2026-09-24", \
+            "so does AP Lang"
         assert classroom_task_date(eleven59(24), "Physics") == "2026-09-24", \
             "a 23:59 upload is that evening's work"
         ai = {"dueDate": {"year": 2026, "month": 9, "day": 23},
