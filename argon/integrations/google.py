@@ -376,6 +376,48 @@ DAYS_AHEAD = 30
 REQUIRE_DUE_DATE = True
 
 
+def coursework_details(account: str, coursework_id: str, course_id: str = "") -> str:
+    """One assignment's body: the teacher's instructions and what is attached.
+
+    The board carries titles only. On 09-24 he asked which questions HW 25
+    was and Argon searched his mail nine times, because nothing it could call
+    returned an assignment's description — which is where Machado writes
+    them. Links to attachments are returned as links; a PDF's pages are not.
+    """
+    svc = _service(account, "classroom", "v1")
+    courses = [course_id] if course_id else [
+        c["id"] for c in svc.courses().list(courseStates=["ACTIVE"]).execute().get("courses", [])]
+    for cid in courses:
+        try:
+            cw = svc.courses().courseWork().get(courseId=cid, id=coursework_id).execute()
+        except Exception:  # noqa: BLE001 — not in this course; try the next
+            continue
+        return render_coursework(cw)
+    return "That assignment is not in any of his active courses."
+
+
+def render_coursework(cw: dict[str, Any]) -> str:
+    lines = [cw.get("title") or "(untitled)"]
+    if (body := (cw.get("description") or "").strip()):
+        lines.append(body[:1500])
+    else:
+        lines.append("(no written instructions)")
+    for m in cw.get("materials") or []:
+        if "driveFile" in m:
+            f = m["driveFile"].get("driveFile", {})
+            lines.append(f"- attached file: {f.get('title', '?')} {f.get('alternateLink', '')}".rstrip())
+        elif "link" in m:
+            lines.append(f"- link: {m['link'].get('title') or ''} {m['link'].get('url', '')}".strip())
+        elif "youtubeVideo" in m:
+            y = m["youtubeVideo"]
+            lines.append(f"- video: {y.get('title', '')} {y.get('alternateLink', '')}".strip())
+        elif "form" in m:
+            lines.append(f"- form: {m['form'].get('title', '')} {m['form'].get('formUrl', '')}".strip())
+    if cw.get("alternateLink"):
+        lines.append(f"Open in Classroom: {cw['alternateLink']}")
+    return "\n".join(lines)
+
+
 def _all_coursework(svc, course_id: str) -> list[dict[str, Any]]:
     """Every published item in a course, paged.
 
@@ -771,6 +813,15 @@ def _selftest() -> None:
         assert due_precision({"dueDate": {"year": 2026, "month": 9, "day": 20}}) \
             == "work_by_day"
         assert due_precision({}) == ""
+
+        # An assignment's body comes back, with its attachments as links.
+        shown = render_coursework({
+            "title": "HW 25", "description": "p. 212 #3-19 odd, #24",
+            "materials": [{"driveFile": {"driveFile": {"title": "Textbook Exercises",
+                                                       "alternateLink": "https://d/x"}}}],
+            "alternateLink": "https://classroom/hw25"})
+        assert "#3-19 odd" in shown and "Textbook Exercises https://d/x" in shown
+        assert "(no written instructions)" in render_coursework({"title": "HW 26"})
 
         # A post carries its title and its body, because either alone is
         # useless: AP Lang's title is the day and the body is the work.
