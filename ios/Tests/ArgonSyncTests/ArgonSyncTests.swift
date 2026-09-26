@@ -142,6 +142,23 @@ final class FailureTests: XCTestCase {
   }
 }
 
+// MARK: - release
+
+final class ReleaseTests: XCTestCase {
+  /// The server's "let me out". If this stops decoding, asking Argon to unblock
+  /// silently does nothing again — the 09-24 failure.
+  func testReleaseDecodesAndAMalformedOneIsIgnored() throws {
+    let json = #"{"tasks":[],"release":{"until":"2099-09-24T22:20:00-07:00","version":3}}"#
+    let state = try JSONDecoder().decode(ArgonState.self, from: Data(json.utf8))
+    XCTAssertEqual(state.release?.version, 3)
+    XCTAssertNotNil(state.release?.untilDate)
+
+    let broken = #"{"tasks":[],"release":{"until":5}}"#
+    let tolerant = try JSONDecoder().decode(ArgonState.self, from: Data(broken.utf8))
+    XCTAssertNil(tolerant.release, "a bad release must not blank the whole board")
+  }
+}
+
 // MARK: - push registration receipt
 
 final class RegistrationReceiptTests: XCTestCase {

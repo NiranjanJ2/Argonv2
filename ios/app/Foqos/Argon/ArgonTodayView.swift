@@ -58,6 +58,10 @@ struct ArgonTodayView: View {
   /// not watching. That used to be a whole card with a moon on it.
   private var subtitle: String {
     let day = Date().formatted(.dateTime.weekday(.wide).month(.wide).day())
+    // A release he asked for is the first thing he'd want confirmed.
+    if let until = store.state.release?.untilDate, until > Date() {
+      return "\(day). Unblocked until \(until.formatted(date: .omitted, time: .shortened))."
+    }
     if let period = store.state.school.period { return "\(day), in \(period)" }
     return store.state.ticking ? day : "\(day). Argon is off until 4 PM."
   }

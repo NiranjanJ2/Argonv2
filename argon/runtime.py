@@ -83,6 +83,9 @@ class Runtime:
         self.agent.urgent_now = self.urgent_now
         self._prompt_day = clock.day_key()
         self._last_classroom_sync: datetime | None = None
+        #: coursework id -> course id, from the last sync, so fetching one
+        #: assignment's details is one call instead of one per course.
+        self._course_of: dict[str, str] = {}
         self._agenda_cache: list[str] = []
         self._agenda_events: list[dict] = []
         self._agenda_at: datetime | None = None
@@ -408,6 +411,8 @@ class Runtime:
             until = clock.now() + timedelta(hours=TASK_LOCK_HOURS)
             self.store.set_lock(until, f"working on {task.title}"[:120],
                                 source="task", task_id=task.id)
+        # Starting work is him asking for the shield back.
+        self.store.clear_release("he started a task")
         self.wake_phone("task started")
         return task
 
@@ -516,6 +521,8 @@ class Runtime:
         added = 0
         for item in items:
             seen.add(item["id"])
+            if item.get("courseId"):
+                self._course_of[item["id"]] = item["courseId"]
             # Genuinely new, not merely "not currently open". external_ids only
             # lists open tasks, so counting against it reported every completed
             # assignment as freshly added on every sync — "20 added" for a board
@@ -812,6 +819,22 @@ class Runtime:
               required=["title", "start"])
         t.add("assignments", "Outstanding Google Classroom work.",
               lambda: route("classroom", google.list_assignments), untrusted=True)
+
+        def assignment_details(task: str) -> str:
+            found = store.find_task(task)
+            if found is None or found.source != "classroom" or not found.external_id:
+                return ("No single Classroom assignment matches that — use the "
+                        "title or id from list_tasks.")
+            return route("classroom", google.coursework_details, found.external_id,
+                         self._course_of.get(found.external_id, ""))
+
+        t.add("assignment_details",
+              "One Classroom assignment's instructions and attachments — which "
+              "questions, which pages. Use this when he asks what an assignment "
+              "actually is; the board has titles only, and mail will not have it.",
+              assignment_details,
+              params={"task": {"type": "string", "description": "id or part of the title"}},
+              required=["task"], untrusted=True)
         t.add("search_mail",
               "Search his mail. Searches every authorised account, including "
               "school — teachers and counsellors write there.",
@@ -845,6 +868,11 @@ class Runtime:
                 return "Error: escalations needs escalate_minutes."
             begins = clock.now() + timedelta(minutes=float(start_in_minutes))
             until = begins + timedelta(minutes=float(minutes))
+            # A release still running would make the phone refuse this lock.
+            # A lock that starts later keeps the release until then, so
+            # "unblock for five minutes, then block again" works as two calls.
+            if start_in_minutes < 1:
+                store.clear_release("he asked to be locked again")
             store.set_lock(until, reason or "he asked to be locked in",
                            starts=begins,
                            escalate_minutes=int(escalate_minutes),
@@ -872,12 +900,29 @@ class Runtime:
                   "an app he deletes."
             )
 
-        def unlock_phone() -> str:
-            if store.lock() is None:
-                return "No lock is set."
-            store.clear_lock("agent lifted it")
-            self.wake_phone("unlock")
-            return "Lock lifted. The phone releases on its next wake."
+        def unlock_phone(minutes: float = 120) -> str:
+            """Let him out of whatever is blocking the phone.
+
+            It used to lift only a lock Argon had set, and answer "No lock is
+            set." otherwise — while the evening block, which the phone keeps
+            itself, had him locked out. He asked four times on 09-23/24, sick,
+            and ended up spending his own emergency unblocks.
+            """
+            if not 5 <= minutes <= 12 * 60:
+                return "Error: minutes must be between 5 and 720."
+            if store.lock() is not None:
+                store.clear_lock("he asked to be let out")
+            until = clock.now() + timedelta(minutes=float(minutes))
+            store.set_release(until)
+            pushed = self.wake_phone("release")
+            return (f"Release sent: every block — a lock, tonight's evening block, "
+                    f"a task's shield — is off until {until:%H:%M}, and the evening "
+                    f"block will not start before then. "
+                    + ("The phone was pushed; it confirms by reporting it is not "
+                       "blocked. Tell him it's on its way off, not that it is off."
+                       if pushed else
+                       "The phone could not be pushed; it applies when he opens the "
+                       "app. Tell him to open Argon once."))
 
         def resume() -> str:
             """Come back on watch. Only he can lift a stand-down.
@@ -929,7 +974,15 @@ class Runtime:
                       "escalations": {
                           "type": "number",
                           "description": "how many times it may extend"}})
-        t.add("unlock_phone", "Lift a lock you set.", unlock_phone)
+        t.add("unlock_phone",
+              "Let him out: drops every block on his phone — a lock you set, the "
+              "evening block, a started task's shield — until the time given. "
+              "Call it whenever he asks to be unblocked or unlocked; if he says "
+              "he is blocked, he is, whatever you think is set. Sick or done for "
+              "the night: give minutes to cover the rest of the evening.",
+              unlock_phone,
+              params={"minutes": {"type": "number",
+                                  "description": "how long, 5 to 720; default 120"}})
 
         t.add("sync_classroom",
               "Pull his Classroom work onto the task board. Runs on its own "
@@ -1033,8 +1086,9 @@ class Runtime:
         starting 20:30" while the phone had never heard of it.
         """
         rec = self.store.lock_record()
+        phone = self._phone_block_line()
         if rec is None:
-            return ""
+            return phone
         applied = self.store.lock_applied() or {}
         wanted, got = rec.get("version", 0), applied.get("version", -1)
         when = f"{rec['from_at']:%H:%M}–{rec['until_at']:%H:%M}"
@@ -1048,7 +1102,28 @@ class Runtime:
                     f"is on.")
         return (f"LOCK {when} confirmed by the phone"
                 + (" and blocking now." if applied.get("shielded")
-                   else ", not blocking yet."))
+                   else ", not blocking yet.")
+                + (f" {phone}" if phone else ""))
+
+    def _phone_block_line(self) -> str:
+        """What the phone last said is blocking it, and any release in force.
+
+        The server's lock is only one of three things that can block him; the
+        evening block and a session he started live on the phone. Without this
+        line the model answered "there's no lock" to a phone that was locked.
+        """
+        bits = []
+        report = self.store.setting("phone_block") or {}
+        if report.get("blocked"):
+            source = {"evening": "the evening block", "argon": "a lock Argon set",
+                      "his": "a session he started himself"}.get(
+                          report.get("source", ""), "something")
+            bits.append(f"PHONE REPORTS IT IS BLOCKED by {source} "
+                        f"(as of {str(report.get('at', ''))[11:16]}).")
+        if (rel := self.store.release()) is not None:
+            bits.append(f"A release is in force until {rel['until'][11:16]}: "
+                        f"nothing blocks until then.")
+        return " ".join(bits)
 
     def publish_lock_transition(self) -> None:
         """Push the phone when the lock turns on or off by itself.

@@ -70,6 +70,8 @@ final class ArgonAppDelegate: NSObject, UIApplicationDelegate {
     ) { [weak self] _ in
       MainActor.assumeIsolated {
         guard let self else { return }
+        // A release first: it decides whether anything may block at all.
+        ArgonLockReconciler.apply(self.store.state.release, context: container.mainContext)
         ArgonLockReconciler.reconcile(self.store.state.lock,
                                       context: container.mainContext)
         // Tonight's block, armed with the system. Same hook for the same
@@ -81,6 +83,8 @@ final class ArgonAppDelegate: NSObject, UIApplicationDelegate {
            let profile = ArgonLockReconciler.profile(in: container.mainContext) {
           ArgonRoutineScheduler.apply(routine, profileId: profile.id)
         }
+        ArgonLockReconciler.reportActual(routine: self.store.state.routine,
+                                         context: container.mainContext)
       }
     }
   }

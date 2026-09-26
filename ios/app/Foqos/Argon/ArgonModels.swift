@@ -236,6 +236,16 @@ struct ArgonPlannerStatus: Codable, Equatable {
 /// afternoon sheet — or the default he gets by not filling it in — and the
 /// phone arms a `DeviceActivitySchedule` from it (`ArgonRoutineScheduler`),
 /// so the block fires with the app closed and the server down.
+/// The server's release: every block off until `until`. Versioned so the
+/// phone applies each one once, and so a release it already applied is not
+/// re-applied after he has chosen to block again.
+struct ArgonRelease: Codable, Equatable {
+  var until: String
+  var version: Int
+
+  var untilDate: Date? { ArgonDate.parse(until) }
+}
+
 struct ArgonRoutine: Codable, Equatable {
   /// "HH:MM". His answer if he gave one, otherwise `defaultStart`.
   var startAt: String
@@ -311,9 +321,12 @@ struct ArgonState: Codable, Equatable {
   var brief: ArgonBrief?
   var planner: ArgonPlannerStatus?
   var routine: ArgonRoutine?
+  /// "Let me out" from the server: drop every block until `until`.
+  var release: ArgonRelease?
 
   enum CodingKeys: String, CodingKey {
     case now, school, ticking, tasks, facts, unread, budget, lock, brief, planner, routine
+    case release
   }
 
   init(from decoder: Decoder) throws {
@@ -331,6 +344,7 @@ struct ArgonState: Codable, Equatable {
     // sheet, not a blank board.
     planner = try? c.decodeIfPresent(ArgonPlannerStatus.self, forKey: .planner)
     routine = try? c.decodeIfPresent(ArgonRoutine.self, forKey: .routine)
+    release = try? c.decodeIfPresent(ArgonRelease.self, forKey: .release)
   }
 
   static let empty = try! JSONDecoder().decode(ArgonState.self,

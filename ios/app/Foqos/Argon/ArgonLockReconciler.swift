@@ -114,13 +114,85 @@ enum ArgonLockReconciler {
   /// Tell the server what actually happened, success or failure.
   ///
   /// Keyed on the lock's version, so the server compares what it wanted with
-  /// what landed instead of guessing from silence.
+  /// what landed instead of guessing from silence. Sent only when the answer
+  /// changes: reconcile runs on every refresh, and on 09-24 the same
+  /// "v15 shielded=true" went out ten times in thirty seconds.
   private static func report(_ lock: ArgonLock?, shielded: Bool, error: String?) {
     guard let lock else { return }
-    ArgonLog.note("lock", "v\(lock.version) shielded=\(shielded)"
-                  + (error.map { " — \($0)" } ?? ""))
+    let line = "v\(lock.version) shielded=\(shielded)" + (error.map { " — \($0)" } ?? "")
+    guard UserDefaults.standard.string(forKey: lastReportKey) != line else { return }
+    UserDefaults.standard.set(line, forKey: lastReportKey)
+    ArgonLog.note("lock", line)
     Task { try? await ArgonAppDelegate.shared.client.reportLock(
       version: lock.version, shielded: shielded, error: error) }
+  }
+
+  private static let lastReportKey = "argon.lock.lastReport"
+
+  // MARK: release — "let me out", of everything
+
+  /// Apply the server's release, once per version, or withdraw one it took back.
+  ///
+  /// The same thing his emergency unblock does — stop whatever session is
+  /// running and hold Argon off — without spending one of his three, because
+  /// asking Argon is the authorisation. The hold goes in the app group, so the
+  /// evening block (started by the monitor extension) honours it too.
+  static func apply(_ release: ArgonRelease?, context: ModelContext) {
+    let appliedKey = "argon.release.appliedVersion"
+    if let release, let until = release.untilDate, until > Date() {
+      guard release.version > UserDefaults.standard.integer(forKey: appliedKey) else { return }
+      UserDefaults.standard.set(release.version, forKey: appliedKey)
+      ArgonOverride.engage(until: until, fromServer: true)
+      ArgonLockWindow.disarm()
+      let stopped = StrategyManager.shared.releaseForArgon(context: context)
+      UserDefaults.standard.removeObject(forKey: ownedKey)
+      ArgonLog.note("lock", "release v\(release.version) applied"
+                    + (stopped ? ", stopped the running session" : ", nothing was running"))
+    } else if ArgonOverride.isFromServer, ArgonOverride.isActive {
+      // He asked to be locked again or started a task; the server withdrew
+      // its release. His own emergency unblock is never withdrawn from here.
+      ArgonOverride.clear()
+      ArgonLog.note("lock", "release withdrawn by the server")
+    }
+  }
+
+  /// What is actually blocking the phone, reported whenever it changes —
+  /// including when the server has no lock at all.
+  ///
+  /// The server only knows about locks it set. The evening block and his own
+  /// sessions live here, so on 09-24 Argon told him "there's no active lock"
+  /// four times while the evening block had him locked out.
+  static func reportActual(routine: ArgonRoutine?, context: ModelContext) {
+    StrategyManager.shared.loadActiveSession(context: context)
+    let active = StrategyManager.shared.activeSession
+    let source: String
+    if active == nil {
+      source = "none"
+    } else if let owned = UserDefaults.standard.string(forKey: ownedKey),
+              owned == active?.blockedProfile.id.uuidString {
+      source = "argon"
+    } else if routine.map(inEveningWindow) == true {
+      source = "evening"
+    } else {
+      source = "his"
+    }
+    let line = source
+    guard UserDefaults.standard.string(forKey: lastActualKey) != line else { return }
+    UserDefaults.standard.set(line, forKey: lastActualKey)
+    ArgonLog.note("lock", "phone blocked by: \(source)")
+    Task { try? await ArgonAppDelegate.shared.client.report(
+      ["blocked": active != nil, "source": source]) }
+  }
+
+  private static let lastActualKey = "argon.lock.lastActual"
+
+  /// Is it inside tonight's evening-block window right now?
+  static func inEveningWindow(_ routine: ArgonRoutine) -> Bool {
+    guard let start = routine.startMinutes else { return false }
+    let now = Calendar.current.dateComponents([.hour, .minute], from: Date())
+    let minute = (now.hour ?? 0) * 60 + (now.minute ?? 0)
+    let into = (minute - start + 24 * 60) % (24 * 60)
+    return into < routine.windowMinutes && ArgonRoutineSettings.isSchoolNightToday()
   }
 
   /// Drop whatever Argon raised, leaving anything he started himself alone.

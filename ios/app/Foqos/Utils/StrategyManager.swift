@@ -548,17 +548,8 @@ class StrategyManager: ObservableObject {
       return
     }
 
-    // Stop the active session using the manual strategy, by passes any other strategy in view
-    let manualStrategy = getStrategy(id: ManualBlockingStrategy.id, context: context)
-    _ = manualStrategy.stopBlocking(
-      context: context,
-      session: activeSession
-    )
-
-    // Do end sections for the profile
-    self.liveActivityManager.endSessionActivity()
+    stopForRelease(activeSession, context: context)
     self.scheduleReminder(profile: activeSession.blockedProfile)
-    self.stopTimer()
 
     // Decrement the remaining emergency unblocks
     emergencyUnblocksRemaining -= 1
@@ -578,6 +569,25 @@ class StrategyManager: ObservableObject {
 
     // Refresh widgets when emergency unblock ends session
     WidgetCenter.shared.reloadTimelines(ofKind: "ProfileControlWidget")
+  }
+
+  /// Argon was asked to let him out. The emergency unblock's stop, without
+  /// spending one of his three: he asked, which is the whole authorisation.
+  /// Returns whether anything was running.
+  @discardableResult
+  func releaseForArgon(context: ModelContext) -> Bool {
+    guard let activeSession = getActiveSession(context: context) else { return false }
+    stopForRelease(activeSession, context: context)
+    return true
+  }
+
+  private func stopForRelease(_ session: BlockedProfileSession, context: ModelContext) {
+    // The manual strategy stops any session, whatever started it — NFC, QR,
+    // a timer, the evening block.
+    let manualStrategy = getStrategy(id: ManualBlockingStrategy.id, context: context)
+    _ = manualStrategy.stopBlocking(context: context, session: session)
+    self.liveActivityManager.endSessionActivity()
+    self.stopTimer()
   }
 
   func resetEmergencyUnblocks() {

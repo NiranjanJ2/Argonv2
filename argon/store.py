@@ -659,7 +659,14 @@ class Store:
         Kept apart from the desired lock on purpose: one is what Argon wants,
         the other is what is true, and collapsing them is how it ends up
         reporting a block that never landed.
+
+        The transcript row is written only when the answer changes. The phone
+        reconciles on every refresh and reported "v15 shielded=True" ten times
+        in thirty seconds on 09-24; each copy was a line in the model's context.
         """
+        before = self.lock_applied() or {}
+        changed = (before.get("version"), before.get("shielded"), before.get("error", "")) \
+            != (int(version), bool(shielded), error or "")
         with self._lock:
             self._db.execute(
                 "INSERT OR REPLACE INTO settings (key, value) VALUES "
@@ -668,9 +675,10 @@ class Store:
                              "error": error or "",
                              "at": clock.now().isoformat()}),))
             self._db.commit()
-        self._t.append("lock_applied",
-                       summary=f"v{version} shielded={shielded}"
-                               + (f" — {error}" if error else ""))
+        if changed:
+            self._t.append("lock_applied",
+                           summary=f"v{version} shielded={shielded}"
+                                   + (f" — {error}" if error else ""))
 
     def lock_applied(self) -> dict | None:
         with self._lock:
@@ -688,6 +696,43 @@ class Store:
             self._db.execute("DELETE FROM settings WHERE key='lock'")
             self._db.commit()
         self._t.append("lock_cleared", summary=why[:200])
+
+    # -- release: "let me out", of everything ---------------------------
+    def release(self) -> dict | None:
+        """The live release, or None. ``{"until": iso, "version": n}``.
+
+        A release is not the absence of a lock. The phone can be blocked by
+        three things — a lock Argon set, the evening block it keeps itself, and
+        the shield a started task raises — and on 09-24 he asked to be let out
+        of the evening block four times while Argon answered "there's no lock",
+        because the only thing it could lift was the first. A release tells the
+        phone to drop all of them until a time, the way his emergency unblock
+        does, without spending one of his three.
+        """
+        rec = self.setting("release")
+        if not rec:
+            return None
+        try:
+            until = datetime.fromisoformat(rec["until"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        return rec if until > clock.now() else None
+
+    def set_release(self, until: datetime) -> int:
+        version = int(self.setting("release_seq", 0) or 0) + 1
+        self.put_setting("release_seq", version)
+        self.put_setting("release", {"until": until.isoformat(), "version": version})
+        self._t.append("release_sent", summary=f"every block off until {until:%H:%M}")
+        return version
+
+    def clear_release(self, why: str) -> None:
+        """He asked to be locked in again, or started work: the release ends."""
+        if self.release() is None:
+            return
+        with self._lock:
+            self._db.execute("DELETE FROM settings WHERE key='release'")
+            self._db.commit()
+        self._t.append("release_cleared", summary=why[:200])
 
     def clear_quiet(self) -> None:
         with self._lock:
@@ -859,6 +904,23 @@ def _selftest() -> None:
                           due="2026-09-22", due_at="2026-09-23T23:59:00-07:00")
         assert s.task(math.id).line().endswith(", handed in Wed"), s.task(math.id).line()
         assert "task_reopened" in [e.kind for e in t.window(2)]
+
+        # A release is live until its time, versioned, and cleared on demand.
+        assert s.release() is None
+        v1 = s.set_release(clock.now() + timedelta(hours=2))
+        assert s.release()["version"] == v1
+        assert s.set_release(clock.now() + timedelta(hours=1)) == v1 + 1
+        s.clear_release("he started work")
+        assert s.release() is None
+        s.set_release(clock.now() - timedelta(minutes=1))
+        assert s.release() is None, "an expired release is no release"
+
+        # The phone repeats itself; the transcript does not.
+        before = len([e for e in t.window(2) if e.kind == "lock_applied"])
+        for _ in range(5):
+            s.set_lock_applied(version=15, shielded=True)
+        after = len([e for e in t.window(2) if e.kind == "lock_applied"])
+        assert after - before == 1, (before, after)
 
         assert s.complete_task(a.id).done is True
         assert s.complete_task(a.id) is None, "completing twice is not an event"

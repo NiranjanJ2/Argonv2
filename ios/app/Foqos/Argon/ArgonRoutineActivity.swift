@@ -42,6 +42,14 @@ class ArgonRoutineActivity: TimerActivity {
       return
     }
 
+    // He was let out — by his emergency unblock or by asking Argon. The block
+    // used to fire regardless, which on 09-24 locked him out at 20:00 while he
+    // was asleep sick, and nothing but another emergency unblock could undo it.
+    if ArgonRoutineSettings.releasedUntil != nil {
+      log.info("Argon routine for \(profileId): released, not starting")
+      return
+    }
+
     // He filled in the form and started something before the block came round.
     // Locking him out of a session he is already in is the one outcome worse
     // than not locking at all.
@@ -88,6 +96,27 @@ enum ArgonRoutineSettings {
 
   /// Python weekday numbers, so the server's list travels unchanged.
   private static let defaultSchoolNights = [6, 0, 1, 2, 3]
+
+  private static let releasedKey = "argon.release.until"
+
+  /// While set and in the future, nothing Argon owns may block the phone —
+  /// not a lock, not the evening block. Here, in the app group, because the
+  /// monitor extension that starts the evening block cannot read the app's own
+  /// defaults: the release used to live there, and the block never saw it.
+  static var releasedUntil: Date? {
+    let stamp = suite?.double(forKey: releasedKey) ?? 0
+    guard stamp > 0 else { return nil }
+    let until = Date(timeIntervalSinceReferenceDate: stamp)
+    return until > Date() ? until : nil
+  }
+
+  static func setReleased(until: Date?) {
+    if let until {
+      suite?.set(until.timeIntervalSinceReferenceDate, forKey: releasedKey)
+    } else {
+      suite?.removeObject(forKey: releasedKey)
+    }
+  }
 
   static func save(schoolNights: [Int]) {
     suite?.set(schoolNights, forKey: schoolNightsKey)

@@ -250,8 +250,24 @@ def create_app(rt) -> Flask:
             rt.store.set_lock_applied(version=version,
                                       shielded=bool(data.get("shielded")),
                                       error=text_field(data, "error")[:200])
-        rt.transcript.append("phone", summary=", ".join(
-            f"{k}={v}" for k, v in sorted(data.items()))[:300])
+        # What is blocking the phone right now, whatever the server believes:
+        # the evening block and his own sessions live only on the device.
+        if "blocked" in data:
+            now_block = {"blocked": bool(data.get("blocked")),
+                         "source": text_field(data, "source")[:20]}
+            before = rt.store.setting("phone_block") or {}
+            rt.store.put_setting("phone_block", {**now_block, "at": clock.now().isoformat()})
+            if {k: before.get(k) for k in now_block} != now_block:
+                rt.transcript.append("phone_block", summary=(
+                    f"blocked by {now_block['source']}" if now_block["blocked"]
+                    else "not blocked"))
+        # Everything else is an observation — once. The phone reconciles on
+        # every refresh; identical reports were a line each in the context.
+        facts = {k: v for k, v in data.items() if k not in ("applied_at", "blocked", "source")}
+        if facts and facts != rt.store.setting("phone_last"):
+            rt.store.put_setting("phone_last", facts)
+            rt.transcript.append("phone", summary=", ".join(
+                f"{k}={v}" for k, v in sorted(facts.items()))[:300])
         return jsonify({"ok": True})
 
     @app.get("/v1/ios/mode")
@@ -457,6 +473,8 @@ def create_app(rt) -> Flask:
             "budget": {"spent": budget.month()["usd"], "cap": rt.cfg.monthly_cap_usd,
                        "cached_fraction": budget.cached_fraction()},
             "lock": lock_json(),
+            # Drop every block until this time (see Store.release).
+            "release": rt.store.release(),
             "brief": rt.brief_card(),
             # Cheap: no Classroom read. The app fetches /v1/planner only when
             # `planner.due` says there is a sheet to show.
@@ -716,7 +734,7 @@ def _selftest() -> None:
         rt.store.put_setting("planner", {})
         state = c.get("/v2/state", headers=auth).get_json()
         assert state["planner"]["due"] is True, state["planner"]
-        assert state["routine"]["start_at"] == "18:00" and not state["routine"]["chosen"]
+        assert state["routine"]["start_at"] == "20:00" and not state["routine"]["chosen"]
         sheet = c.get("/v1/planner", headers=auth).get_json()
         for key in ("needed", "overdue", "today", "long_term", "suggestions",
                     "start_at", "warning_minutes", "opens_after"):
