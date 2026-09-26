@@ -81,6 +81,7 @@ class Agent:
         messages = context.build(self.t, self.system, extra=extra)
         schemas = self.tools.schemas(background=background)
 
+        nudged = False
         for step in range(MAX_STEPS):
             try:
                 reply = provider.complete(
@@ -108,6 +109,20 @@ class Agent:
                                   summary=f"answered by {reply.model}; {reply.fell_back}"[:300])
 
             if not reply.tool_calls:
+                # He asked and is waiting, and the model finished on a tool
+                # call's result with nothing to say. On 09-24 "Can you stop the
+                # block" was acted on at 22:31 and answered at 23:24, by a tick.
+                # One nudge, inside this turn only; it never reaches the
+                # transcript.
+                if (not background and not reply.text.strip() and not out.spoke
+                        and not nudged and out.tools_used):
+                    nudged = True
+                    messages.append({"role": "assistant", "content": None,
+                                     "tool_calls": [], "_items": reply.items})
+                    messages.append({"role": "user", "content":
+                                     "(Now reply to him — one or two sentences on what "
+                                     "you did or found.)"})
+                    continue
                 out.text = reply.text
                 # Interactive: the text is the answer. Background: it was
                 # thinking, and thinking is not delivered.
@@ -503,6 +518,18 @@ def _selftest() -> None:
         count = len(delivered)
         out = agent.receive("say it")
         assert delivered[count:] == ["only once"], delivered[count:]
+
+        # He asked; the model acted and then said nothing. One nudge gets the
+        # reply out in the same turn instead of from a tick an hour later.
+        tools.add("unlock_phone", "release", lambda: "Release sent.")
+        scripted.append(provider.Reply(tool_calls=[
+            {"id": "u1", "function": {"name": "unlock_phone", "arguments": "{}"}}]))
+        scripted.append(provider.Reply(text=""))
+        scripted.append(provider.Reply(text="Sent the release; it's coming off."))
+        count = len(delivered)
+        out = agent.receive("can you stop the block")
+        assert delivered[count:] == ["Sent the release; it's coming off."], delivered[count:]
+        assert not scripted, "exactly one nudge"
 
         # A provider failure never reaches him.
         def boom(*a, **k):
