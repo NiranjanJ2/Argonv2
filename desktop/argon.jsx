@@ -45,6 +45,14 @@ export const className = `
   box-shadow: 0 16px 48px rgba(0,0,0,0.45), 0 0 24px rgba(77,163,255,0.10);
 
   h1 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: -0.2px; }
+  .head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .refresh { font-size: 13px; line-height: 20px; width: 22px; height: 22px;
+             text-align: center; cursor: pointer; color: #83C2FF; opacity: 0.7;
+             border: 1px solid rgba(131,194,255,0.30); border-radius: 6px;
+             flex: 0 0 auto; user-select: none; }
+  .refresh:hover { opacity: 1; background: rgba(131,194,255,0.12); }
+  .refresh.spinning { animation: spin 0.9s linear infinite; opacity: 1; }
+  @keyframes spin { to { transform: rotate(360deg); } }
   .meta { font-size: 11px; opacity: 0.55; margin-top: 3px; }
   .sep { height: 1px; background: rgba(255,255,255,0.08); margin: 12px 0 6px; }
 
@@ -111,7 +119,19 @@ export const className = `
   .err { font-size: 11px; color: #FF8F8F; padding-top: 6px; line-height: 1.45; }
 `;
 
-export const render = ({ output }) => {
+// The refresh button. Asks the server to re-read Classroom, then draws what
+// comes back at once — the next twenty-second poll would only redraw the same
+// board — by handing the output to Übersicht as if the command had just run.
+const refresh = (event, dispatch) => {
+  event.stopPropagation();
+  const btn = event.currentTarget;
+  btn.classList.add("spinning");
+  run(SCRIPT + " --do refresh --json").then(
+    (out) => dispatch({ type: "UB/COMMAND_RAN", output: out }),
+    () => btn.classList.remove("spinning"));
+};
+
+export const render = ({ output }, dispatch) => {
   let view;
   try {
     view = JSON.parse(output);
@@ -120,7 +140,15 @@ export const render = ({ output }) => {
     // showing them beats a blank panel that looks like "nothing to do".
     return <div className="err">{String(output).slice(0, 200)}</div>;
   }
-  if (!view.ok) return <div className="err">{view.lines[0]}</div>;
+  if (!view.ok) {
+    return (
+      <div>
+        <div className="head"><h1>Argon</h1>
+          <div className="refresh" onClick={(e) => refresh(e, dispatch)}>↻</div></div>
+        <div className="err">{view.lines[0]}</div>
+      </div>
+    );
+  }
 
   const running = view.tasks.find((t) => t.started);
   const rest = view.tasks.filter((t) => !t.started);
@@ -149,7 +177,11 @@ export const render = ({ output }) => {
 
   return (
     <div className={laterOpen ? "open" : ""}>
-      <h1>{view.title}</h1>
+      <div className="head">
+        <h1>{view.title}</h1>
+        <div className="refresh" title="Re-read Classroom"
+             onClick={(e) => refresh(e, dispatch)}>↻</div>
+      </div>
       {view.lines.map((line, i) => <div className="meta" key={i}>{line}</div>)}
 
       {view.focus && (

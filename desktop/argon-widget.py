@@ -9,6 +9,7 @@ the renderers only decide how it looks.
     argon-widget.py --json       Übersicht (argon.jsx renders it)
     argon-widget.py --selftest   asserts, no network
     argon-widget.py --do start <task-id>
+    argon-widget.py --do refresh [--json]   re-read Classroom, then render
 
 Actions go through the same HTTP surface the phone uses. They deliberately do
 not touch the database directly: a task completed from the menu bar should be
@@ -59,7 +60,8 @@ def _trace(line: str) -> None:
         pass
 
 
-def call(path: str, method: str = "GET", body: dict | None = None) -> dict:
+def call(path: str, method: str = "GET", body: dict | None = None,
+         timeout: float = TIMEOUT) -> dict:
     cfg = config()
     req = urllib.request.Request(
         cfg["base"].rstrip("/") + path,
@@ -73,14 +75,21 @@ def call(path: str, method: str = "GET", body: dict | None = None) -> dict:
                  "User-Agent": "Argon-Widget/2 (macOS)"},
         method=method,
     )
-    with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+    with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read())
 
 
-def fetch() -> dict:
+#: A refresh waits for the server to re-read Classroom — a dozen Google calls.
+FRESH_TIMEOUT = 30.0
+
+
+def fetch(fresh: bool = False) -> dict:
+    """The board. ``fresh`` has the server re-read Classroom first (unless it
+    did in the last two minutes) — the refresh button's whole point."""
     base = config().get("base", "?")
     try:
-        state = call("/v2/state")
+        state = (call("/v2/state?fresh=1", timeout=FRESH_TIMEOUT) if fresh
+                 else call("/v2/state"))
     except (urllib.error.URLError, TimeoutError, OSError) as e:
         # Name the host in the message. "nodename nor servname provided" says
         # a lookup failed but not what was looked up, which is useless when the
@@ -221,7 +230,10 @@ def render_swiftbar(view: dict) -> str:
     if view.get("focus"):
         out.append(f"Unlock now | bash={me} param1=--do param2=unlock "
                    f"terminal=false refresh=true")
-    out.append(f"Refresh | refresh=true")
+    # Re-reads Classroom on the server, not just this menu: a plain SwiftBar
+    # refresh re-ran the script against the same board.
+    out.append(f"Refresh | bash={me} param1=--do param2=refresh "
+               f"terminal=false refresh=true")
     return "\n".join(out)
 
 
@@ -322,6 +334,7 @@ def selftest() -> None:
     assert out.splitlines()[1] == "---" and "param2=complete" in out
     json.loads(render_json(build_view(state, now=now)))
     assert do("nonsense") == "unknown action 'nonsense'"
+    assert "param2=refresh" in out, "the menu's Refresh re-reads Classroom"
     print("widget selftest ok")
 
 
@@ -331,6 +344,12 @@ def main(argv: list[str]) -> int:
         return 0
     if "--do" in argv:
         i = argv.index("--do")
+        if argv[i + 1:i + 2] == ["refresh"]:
+            # Prints the fresh render, so Übersicht can draw it straight away
+            # instead of waiting for its next poll.
+            view = build_view(fetch(fresh=True))
+            print(render_json(view) if "--json" in argv else render_swiftbar(view))
+            return 0
         print(do(*argv[i + 1:i + 3]))
         return 0
     view = build_view(fetch())

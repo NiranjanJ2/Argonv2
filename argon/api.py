@@ -15,6 +15,7 @@ here rather than in a TestFlight build.
 from __future__ import annotations
 
 import hmac
+from datetime import timedelta
 import logging
 from functools import wraps
 from typing import Any
@@ -293,6 +294,9 @@ def create_app(rt) -> Flask:
         # "always granted" was true only in the comment — the lock stayed up and
         # the next reconcile put the shield straight back.
         rt.store.clear_lock(f"he overrode for {minutes}m")
+        # And a release, so the evening block and a task's shield come off too
+        # — clearing the lock alone was the 09-24 failure (Store.release).
+        rt.store.set_release(clock.now() + timedelta(minutes=minutes))
         # Push immediately. This is the most latency-sensitive of the three:
         # he is standing there locked out having just asked to be let go, and
         # "it will clear on the next background refresh" is hours.
@@ -732,6 +736,8 @@ def _selftest() -> None:
         assert c.get("/v1/ios/mode", headers=auth).status_code == 200
         assert c.post("/v1/ios/override", json={"minutes": 30},
                       headers=auth).get_json()["minutes"] == 30
+        assert rt.store.release() is not None, \
+            "an override releases the evening block too, not just the lock"
         assert c.get("/v1/planner", headers=auth).status_code == 200
         assert c.get("/v1/ac", headers=auth).status_code == 200
 
