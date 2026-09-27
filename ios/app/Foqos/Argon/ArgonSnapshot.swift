@@ -64,3 +64,51 @@ struct ArgonSnapshot: Codable, Equatable {
                          watching: state.ticking, updated: Date())
   }
 }
+
+/// Where the server is, written by the app for the widget's refresh button.
+///
+/// The app keeps its address and token in its own defaults, which a widget
+/// extension cannot read; the app group is the one place both can.
+enum ArgonWidgetServer {
+  private static let baseKey = "argon.widget.base"
+  private static let tokenKey = "argon.widget.token"
+
+  static func save(base: URL, token: String) {
+    let defaults = UserDefaults(suiteName: ArgonSnapshot.suite)
+    defaults?.set(base.absoluteString, forKey: baseKey)
+    defaults?.set(token, forKey: tokenKey)
+  }
+
+  static func load() -> (base: URL, token: String)? {
+    let defaults = UserDefaults(suiteName: ArgonSnapshot.suite)
+    guard let raw = defaults?.string(forKey: baseKey), let base = URL(string: raw),
+          let token = defaults?.string(forKey: tokenKey), !token.isEmpty else { return nil }
+    return (base, token)
+  }
+}
+
+extension ArgonSnapshot {
+  /// Fetch the board and redraw. Runs in the widget's own process when the
+  /// app is not running, so it cannot lean on the app's store or client.
+  /// `fresh=1` has the server re-read Classroom first. Any failure still
+  /// redraws, from the last snapshot, rather than leaving a spinner.
+  static func refresh() async {
+    guard let server = ArgonWidgetServer.load() else {
+      WidgetCenter.shared.reloadAllTimelines()
+      return
+    }
+    var parts = URLComponents(url: server.base.appendingPathComponent("v2/state"),
+                              resolvingAgainstBaseURL: false)
+    parts?.queryItems = [URLQueryItem(name: "fresh", value: "1")]
+    guard let url = parts?.url else { return }
+    var request = URLRequest(url: url, timeoutInterval: 25)
+    request.setValue("Bearer \(server.token)", forHTTPHeaderField: "Authorization")
+    if let (data, response) = try? await URLSession.shared.data(for: request),
+       (response as? HTTPURLResponse)?.statusCode == 200,
+       let state = try? JSONDecoder().decode(ArgonState.self, from: data) {
+      from(state: state).save()
+    } else {
+      WidgetCenter.shared.reloadAllTimelines()
+    }
+  }
+}

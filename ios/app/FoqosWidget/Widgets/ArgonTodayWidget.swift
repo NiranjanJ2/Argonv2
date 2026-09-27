@@ -64,6 +64,20 @@ struct ArgonTodayWidgetView: View {
           ArgonPill(text: "\(snapshot.overdue) late", colour: Argon.overdue,
                     tinted: !accessory)
         }
+        if !accessory {
+          // Refetches from the server — which re-reads Classroom first — then
+          // redraws. Lock-screen widgets are not interactive, so it stays off
+          // there.
+          Button(intent: ArgonRefreshIntent()) {
+            Image(systemName: "arrow.clockwise")
+              .font(.caption2.weight(.semibold))
+              .foregroundStyle(Argon.accent)
+              .frame(width: 22, height: 22)
+              .contentShape(Rectangle())
+          }
+          .buttonStyle(.plain)
+          .accessibilityLabel("Refresh")
+        }
       }
 
       if !accessory {
@@ -92,11 +106,15 @@ struct ArgonTodayWidgetView: View {
         }
       }
 
-      if snapshot.open > 1 {
-        Text("\(snapshot.open) open")
-          .font(.caption2.monospacedDigit())
-          .foregroundStyle(Argon.Tone.faint)
+      // When the board was last fetched, so a tap on refresh visibly lands.
+      HStack(spacing: 4) {
+        if snapshot.open > 1 { Text("\(snapshot.open) open,") }
+        if snapshot.updated > .distantPast {
+          Text("updated \(snapshot.updated.formatted(date: .omitted, time: .shortened))")
+        }
       }
+      .font(.caption2.monospacedDigit())
+      .foregroundStyle(Argon.Tone.faint)
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
   }

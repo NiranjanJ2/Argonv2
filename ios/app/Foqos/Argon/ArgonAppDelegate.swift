@@ -91,6 +91,7 @@ final class ArgonAppDelegate: NSObject, UIApplicationDelegate {
 
   func reconfigure() async {
     await client.configure(base: Self.baseURL, token: Self.token)
+    ArgonWidgetServer.save(base: Self.baseURL, token: Self.token)
     // Settings just changed the address or the token, which is exactly when a
     // registration that failed against the old one can finally succeed.
     await push.syncToken()
@@ -101,6 +102,8 @@ final class ArgonAppDelegate: NSObject, UIApplicationDelegate {
     didFinishLaunchingWithOptions options: [UIApplication.LaunchOptionsKey: Any]? = nil
   ) -> Bool {
     observeStateForLock()
+    // The widget's refresh button fetches on its own; tell it where.
+    ArgonWidgetServer.save(base: Self.baseURL, token: Self.token)
     BGTaskScheduler.shared.register(forTaskWithIdentifier: Self.refreshTaskID,
                                     using: nil) { task in
       guard let task = task as? BGAppRefreshTask else { return }

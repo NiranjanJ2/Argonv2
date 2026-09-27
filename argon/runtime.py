@@ -270,7 +270,7 @@ class Runtime:
         self.sync_if_stale()
         return self.turn(background=False)
 
-    def sync_if_stale(self) -> None:
+    def sync_if_stale(self, max_age: float = CLASSROOM_SYNC_MINUTES * 60) -> None:
         """Refresh Classroom before answering him, if it has been a while.
 
         Syncing used to happen only inside tick_once, which is gated to the
@@ -284,8 +284,7 @@ class Runtime:
         scheduler decides when Argon *speaks*, never how fresh the facts are.
         """
         last = self._last_classroom_sync
-        if last is not None and (
-                clock.now() - last).total_seconds() <= CLASSROOM_SYNC_MINUTES * 60:
+        if last is not None and (clock.now() - last).total_seconds() <= max_age:
             return
         try:
             self.sync_classroom()

@@ -460,8 +460,16 @@ def create_app(rt) -> Flask:
     @app.get("/v2/state")
     @require_token
     def v2_state():
-        """Everything a client needs in one call. /v1 needed four."""
+        """Everything a client needs in one call. /v1 needed four.
+
+        ``?fresh=1`` is the widget's refresh button: re-read Classroom first
+        unless that happened in the last two minutes, so a tap pulls new work
+        rather than redrawing the same board.
+        """
         from argon import planner
+
+        if request.args.get("fresh") == "1":
+            rt.sync_if_stale(max_age=120)
 
         return jsonify({
             "now": clock.now().isoformat(),
@@ -680,6 +688,15 @@ def _selftest() -> None:
         assert c.post("/v1/chat", json={"message": "what's due?"},
                       headers=auth).get_json()["reply"] == "two things due"
         assert c.post("/v1/chat", json={"message": "  "}, headers=auth).status_code == 400
+
+        # The widget's refresh re-reads Classroom first; a plain read does not.
+        ages: list[float] = []
+        real_sync = rt.sync_if_stale
+        rt.sync_if_stale = lambda max_age=0: ages.append(max_age)  # type: ignore[method-assign]
+        c.get("/v2/state", headers=auth)
+        c.get("/v2/state?fresh=1", headers=auth)
+        rt.sync_if_stale = real_sync  # type: ignore[method-assign]
+        assert ages == [120], ages
 
         state = c.get("/v2/state", headers=auth).get_json()
         assert {"now", "school", "ticking", "tasks", "facts", "unread", "budget"} <= set(state)
