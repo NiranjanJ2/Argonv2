@@ -126,9 +126,12 @@ const refresh = (event, dispatch) => {
   event.stopPropagation();
   const btn = event.currentTarget;
   btn.classList.add("spinning");
+  // Stop the spin by hand either way: React reuses this element on redraw
+  // and never removes a class it did not add, so it spun forever.
+  const done = () => btn.classList.remove("spinning");
   run(SCRIPT + " --do refresh --json").then(
-    (out) => dispatch({ type: "UB/COMMAND_RAN", output: out }),
-    () => btn.classList.remove("spinning"));
+    (out) => { done(); dispatch({ type: "UB/COMMAND_RAN", output: out }); },
+    done);
 };
 
 export const render = ({ output }, dispatch) => {
