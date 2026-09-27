@@ -83,6 +83,7 @@ class Runtime:
         self.agent.urgent_now = self.urgent_now
         self._prompt_day = clock.day_key()
         self._last_classroom_sync: datetime | None = None
+        self._board_changed = False
         #: coursework id -> course id, from the last sync, so fetching one
         #: assignment's details is one call instead of one per course.
         self._course_of: dict[str, str] = {}
@@ -289,7 +290,14 @@ class Runtime:
         try:
             self.sync_classroom()
         except Exception as e:  # noqa: BLE001 - a bad sync must not eat his message
+            # Counted as an attempt, so a Google outage is retried on the
+            # half-hour, not every five minutes into the transcript.
+            self._last_classroom_sync = clock.now()
             self.transcript.append("classroom_sync_failed", summary=repr(e)[:200])
+            return
+        # The app and the widget show the board; tell the phone it moved.
+        if self._board_changed:
+            self.wake_phone("board changed")
 
     def receive_async(self, text: str, *, source: str = "ios") -> int:
         """Record his message, answer on a worker, return the transcript seq.
@@ -558,11 +566,17 @@ class Runtime:
                         closed += 1
 
         self._last_classroom_sync = clock.now()
+        self._board_changed = bool(added or closed)
         note = f"classroom: {added} added, {closed} closed, {len(items)} outstanding"
         note += note_suffix
         if refused:
             note += f" (could not read: {', '.join(refused)})"
-        self.transcript.append("classroom_sync", summary=note)
+        # A row only when something happened. The sync now runs every half
+        # hour around the clock, and "0 added, 0 closed" forty-eight times a
+        # day would be forty-eight lines of nothing in the model's context. The
+        # tasks it adds or closes write their own rows.
+        if added or closed or refused:
+            self.transcript.append("classroom_sync", summary=note)
         # Hand back the board it just produced, not only a count.
         #
         # The prompt's copy of the board is built once, at the start of the
@@ -1007,12 +1021,9 @@ class Runtime:
         """One scheduled look.  Returns None when the clock says don't bother."""
         if not force and not schedule.should_tick():
             return None
-        # Keep the board current before deciding anything from it. Half-hourly,
-        # because it is a dozen Google calls and his homework does not change
-        # every five minutes.
-        if force or self._last_classroom_sync is None or (
-                clock.now() - self._last_classroom_sync
-        ).total_seconds() > CLASSROOM_SYNC_MINUTES * 60:
+        # The board is kept current by run(), around the clock; a forced look
+        # (`argon tick`) syncs first so it answers from what is true now.
+        if force:
             try:
                 self.sync_classroom()
             except Exception as e:  # noqa: BLE001 - a bad sync must not stop the tick
@@ -1252,16 +1263,26 @@ class Runtime:
         while not self._stop.is_set():
             started = time.monotonic()
             try:
-                # Outside the tick gate on purpose. A lock starting or lapsing
-                # is a clock event, not a conversation, and the evening window
-                # has nothing to do with whether the phone needs telling.
-                self.publish_lock_transition()
-                self.tick_once()
+                self.step()
             except Exception as e:  # noqa: BLE001 - a bad tick must not end the loop
                 self.transcript.append("tick_failed", summary=repr(e))
             elapsed = time.monotonic() - started
             # Never busy-loop if a turn somehow outruns the interval.
             self._stop.wait(max(30.0, period - elapsed))
+
+    def step(self) -> None:
+        """One pass of the loop: the clock's jobs, then maybe a look."""
+        # Outside the tick gate on purpose. A lock starting or lapsing is a
+        # clock event, not a conversation, and the evening window has nothing
+        # to do with whether the phone needs telling.
+        self.publish_lock_transition()
+        # The board, around the clock. This lived inside tick_once, which is
+        # gated to school-night evenings to save model calls — so from Thursday
+        # 23:39 to Saturday night nothing synced, and Friday's new work never
+        # reached the board. When Argon may *speak* is a cost decision; how
+        # fresh the facts are is not.
+        self.sync_if_stale()
+        self.tick_once()
 
     def stop(self) -> None:
         self._stop.set()
@@ -1402,6 +1423,20 @@ def _selftest() -> None:
         fresh = Runtime(config.Config())
         calls: list[int] = []
         fresh.sync_classroom = lambda: calls.append(1) or "synced"  # type: ignore[method-assign]
+
+        # The loop syncs outside the evening window — Saturday late morning,
+        # when no tick is allowed — and a quiet sync leaves no transcript row.
+        clock.set_for_test(datetime(2026, 9, 26, 11, 0, tzinfo=clock.TZ))
+        assert not schedule.should_tick(), "Saturday is outside the tick window"
+        weekend = Runtime(config.Config())
+        synced: list[int] = []
+        weekend.sync_classroom = lambda: synced.append(1) or "synced"  # type: ignore[method-assign]
+        weekend.step()
+        assert synced == [1], "the board syncs whether or not Argon may speak"
+        weekend._last_classroom_sync = clock.now()
+        weekend.step()
+        assert synced == [1], "and not more than every half hour"
+        clock.set_for_test(datetime(2026, 9, 19, 20, 0, tzinfo=clock.TZ))  # as before
 
         assert fresh._last_classroom_sync is None
         fresh.sync_if_stale()
