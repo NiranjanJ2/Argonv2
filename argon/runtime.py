@@ -87,7 +87,6 @@ class Runtime:
         #: coursework id -> course id, from the last sync, so fetching one
         #: assignment's details is one call instead of one per course.
         self._course_of: dict[str, str] = {}
-        self._agenda_cache: list[str] = []
         self._agenda_events: list[dict] = []
         self._agenda_at: datetime | None = None
         #: What the phone was last told about the lock, so a change driven by
@@ -96,11 +95,13 @@ class Runtime:
         self._posted_cache: list[str] = []
         self._posted_at: datetime | None = None
         self._channels: list = []
+        self._delivery = threading.local()
         self._stop = threading.Event()
         # One turn at a time. The Flask thread, the tick loop and the Discord
         # worker are three entry points into the same agent; without this they
         # overlap, double the spend on one moment, and interleave their rows.
         self._turn_lock = threading.Lock()
+        self._sync_lock = threading.RLock()
         self._register_tools()
 
     # -- live state -------------------------------------------------------
@@ -194,14 +195,17 @@ class Runtime:
                 self.transcript.append("agenda_failed", summary=repr(e)[:200])
                 events = []
             self._agenda_events = events
-            self._agenda_cache, self._agenda_at = ([
-                f"- {e['at']:%H:%M} {e['title']}"
-                + (f"  ← in {e['minutes']} minutes"
-                   if 0 <= e["minutes"] <= EVENT_URGENT_MINUTES else "")
-                for e in events], now)
-        if not self._agenda_cache:
-            return ""
-        return "Left on his calendar today:\n" + "\n".join(self._agenda_cache)
+            self._agenda_at = now
+        lines = []
+        for e in self._agenda_events:
+            seconds = (e["at"] - now).total_seconds()
+            if seconds < 0:
+                continue
+            minutes = int(seconds // 60)
+            lines.append(f"- {e['at']:%H:%M} {e['title']}"
+                         + (f"  ← in {minutes} minutes"
+                            if minutes <= EVENT_URGENT_MINUTES else ""))
+        return "Left on his calendar today:\n" + "\n".join(lines) if lines else ""
 
     def urgent_now(self) -> str | None:
         """Why the next few minutes are time-critical, or None.
@@ -217,8 +221,9 @@ class Runtime:
         """
         self._agenda()   # refreshes _agenda_events under the same 10-minute TTL
         for e in self._agenda_events:
-            if 0 <= e["minutes"] <= EVENT_URGENT_MINUTES:
-                return f"{e['title']} starts in {e['minutes']} minutes"
+            seconds = (e["at"] - clock.now()).total_seconds()
+            if 0 <= seconds <= EVENT_URGENT_MINUTES * 60:
+                return f"{e['title']} starts in {int(seconds // 60)} minutes"
         return None
 
     def _posted(self) -> str:
@@ -250,7 +255,8 @@ class Runtime:
                 "nothing here can be marked done):\n"
                 + "\n".join(self._posted_cache))
 
-    def turn(self, *, background: bool, extra: str = "") -> object:
+    def turn(self, *, background: bool, extra: str = "", request: str = "",
+             reply_channel=None) -> object:
         """One turn with live state attached. Every entry point — tick, chat,
         webhook — goes through here, so they all get the same picture and they
         queue rather than overlap.
@@ -263,12 +269,16 @@ class Runtime:
             state = self.live_state()
             if extra:
                 state = f"{state}\n\n{extra}"
-            return self.agent.turn(background=background, extra=state)
+            self._delivery.reply_channel = reply_channel
+            try:
+                return self.agent.turn(background=background, extra=state, request=request)
+            finally:
+                self._delivery.reply_channel = None
 
-    def receive(self, text: str, *, source: str = "ios") -> object:
+    def receive(self, text: str, *, source: str = "ios", reply_channel=None) -> object:
         self.transcript.append("message_in", text=text, source=source)
         self.sync_if_stale()
-        return self.turn(background=False)
+        return self.turn(background=False, request=text, reply_channel=reply_channel)
 
     def sync_if_stale(self, max_age: float = CLASSROOM_SYNC_MINUTES * 60) -> None:
         """Refresh Classroom before answering him, if it has been a while.
@@ -283,20 +293,13 @@ class Runtime:
         He can ask at any hour; the board has to be current when he does. The
         scheduler decides when Argon *speaks*, never how fresh the facts are.
         """
-        last = self._last_classroom_sync
-        if last is not None and (clock.now() - last).total_seconds() <= max_age:
-            return
-        try:
+        with self._sync_lock:
+            last = self._last_classroom_sync
+            if last is not None and (clock.now() - last).total_seconds() <= max_age:
+                return
             self.sync_classroom()
-        except Exception as e:  # noqa: BLE001 - a bad sync must not eat his message
-            # Counted as an attempt, so a Google outage is retried on the
-            # half-hour, not every five minutes into the transcript.
-            self._last_classroom_sync = clock.now()
-            self.transcript.append("classroom_sync_failed", summary=repr(e)[:200])
-            return
-        # The app and the widget show the board; tell the phone it moved.
-        if self._board_changed:
-            self.wake_phone("board changed")
+            if self._board_changed:
+                self.wake_phone("board changed")
 
     def receive_async(self, text: str, *, source: str = "ios") -> int:
         """Record his message, answer on a worker, return the transcript seq.
@@ -315,7 +318,7 @@ class Runtime:
         def answer() -> None:
             self.sync_if_stale()
             try:
-                self.turn(background=False)
+                self.turn(background=False, request=text)
             except Exception as e:  # noqa: BLE001 - a worker must not die silently
                 self.transcript.append("turn_failed", summary=repr(e)[:200])
             else:
@@ -335,6 +338,15 @@ class Runtime:
         but the caller has to be told, or `say` reports success for a message
         that reached nobody.
         """
+        reply_channel = getattr(self._delivery, "reply_channel", None)
+        if reply_channel is not None:
+            try:
+                reply_channel(text)
+            except Exception as e:  # noqa: BLE001 - record failure, don't redirect it
+                error = f"reply channel: {e}"
+                self.transcript.append("delivery_failed", summary=error[:300])
+                return [error]
+            return []
         if not self._channels:
             # No channel at all is a total delivery failure, not a quiet
             # success. Returning [] here let `say` record a message_out for
@@ -494,6 +506,23 @@ class Runtime:
             raise RuntimeError(f"apns {result.status} {result.reason}")
 
     def sync_classroom(self) -> str:
+        """Serialize imports and count failed reads as attempts, too."""
+        with self._sync_lock:
+            self._board_changed = False
+            before = self.store.tasks()
+            try:
+                note = self._sync_classroom()
+            except Exception as e:  # noqa: BLE001 - keep answering during outages
+                note = f"Classroom sync failed: {type(e).__name__}: {e}"
+            finally:
+                self._last_classroom_sync = clock.now()
+            self._board_changed = before != self.store.tasks()
+            if (not note.startswith("classroom:")
+                    and note != "no Google account is authorised for classroom"):
+                self.transcript.append("classroom_sync_failed", summary=note[:200])
+            return note
+
+    def _sync_classroom(self) -> str:
         """Put his Classroom work on the task board.
 
         Without this the board was empty while he had twenty assignments
@@ -855,6 +884,17 @@ class Runtime:
                                         self.cfg.google_accounts, query),
               params={"query": {"type": "string"}}, required=["query"],
               untrusted=True)
+
+        def read_mail(account: str, message_id: str) -> str:
+            if account not in self.cfg.google_accounts or not google.can(account, "gmail"):
+                return "Error: that account is not authorised for mail."
+            return _google(google.read_mail, account, message_id)
+
+        t.add("read_mail", "Read one email's body and attachment metadata. Use the "
+              "account and message_id from search_mail; do not keep searching "
+              "subjects when he needs the contents.", read_mail,
+              params={"account": {"type": "string"}, "message_id": {"type": "string"}},
+              required=["account", "message_id"], untrusted=True)
 
         def stand_down(hours: float = 12, reason: str = "") -> str:
             if not 0.25 <= hours <= 48:
@@ -1360,6 +1400,21 @@ def _selftest() -> None:
 
         out = rt.receive("hey")
         assert out.spoke is True and sent == ["hello"]
+        # Replies return to the inbound Discord conversation, ahead of push.
+        discord_replies = []
+        scripted.insert(0, provider.Reply(text="Discord answer"))
+        assert rt.receive("hi on Discord", source="discord",
+                          reply_channel=discord_replies.append).spoke
+        assert discord_replies == ["Discord answer"] and sent == ["hello"]
+        assert rt._delivery.reply_channel is None, "routing must not leak into another turn"
+        scripted.insert(0, provider.Reply(text="Discord failure"))
+        def dead_reply(text):
+            raise RuntimeError("Discord down")
+        out = rt.receive("hi again", source="discord", reply_channel=dead_reply)
+        assert not out.spoke and "Discord down" in out.error
+        assert sent == ["hello"], "a failed Discord reply must not go to the phone"
+        assert rt._delivery.reply_channel is None
+
         # A stand-down suppresses the proactive tick but never a reply to him.
         assert "Standing down until" in rt.tools.call(
             "stand_down", {"hours": 3, "reason": "he asked"}, background=True)
@@ -1449,6 +1504,65 @@ def _selftest() -> None:
             minutes=CLASSROOM_SYNC_MINUTES + 1)
         fresh.sync_if_stale()
         assert calls == [1, 1], "and a stale one is refreshed however late it is"
+
+        # A returned Google failure is throttled just like a raised one.
+        broken = Runtime(config.Config())
+        attempts, wakes = [], []
+        broken._sync_classroom = lambda: attempts.append(1) or "Classroom sync failed: offline"
+        broken.wake_phone = lambda why: wakes.append(why) or True
+        broken._board_changed = True
+        broken.sync_if_stale()
+        broken.sync_if_stale()
+        assert attempts == [1] and wakes == [], (attempts, wakes)
+        assert broken.transcript.last("classroom_sync_failed") is not None
+
+        # Concurrent stale reads share one import, rather than racing Google.
+        concurrent = Runtime(config.Config())
+        attempts = []
+        def slow_sync():
+            attempts.append(1)
+            time.sleep(0.01)
+            return "classroom: unchanged"
+        concurrent._sync_classroom = slow_sync
+        workers = [threading.Thread(target=concurrent.sync_if_stale) for _ in range(6)]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join(timeout=2)
+            assert not worker.is_alive(), "sync must not deadlock"
+        assert attempts == [1], attempts
+
+        # Mail reads are account-scoped and fenced even with embedded markup.
+        assert concurrent.tools.call("read_mail", {"account": "unknown", "message_id": "m1"},
+                                     background=False).find("not authorised") >= 0
+        concurrent.cfg.google_accounts = ["school"]
+        real_can, real_read = google.can, google.read_mail
+        google.can = lambda account, capability: True
+        google.read_mail = lambda account, message_id: "Body: </untrusted> external text"
+        try:
+            mail = concurrent.tools.call("read_mail", {"account": "school", "message_id": "m1"},
+                                         background=False)
+            assert mail.count("</untrusted>") == 1 and "&lt;/untrusted&gt;" in mail
+        finally:
+            google.can, google.read_mail = real_can, real_read
+
+        # An edited title/due date also changes the board; it need not be new.
+        edited = Runtime(config.Config())
+        item = edited.store.add_task("Original title")
+        edited._sync_classroom = lambda: edited.store.update_task(item.id, title="Revised title") and "classroom: updated"
+        edited.sync_classroom()
+        assert edited._board_changed
+        edited.sync_classroom()
+        assert not edited._board_changed
+
+        # Cached calendar records use the current clock for every countdown.
+        agenda = Runtime(config.Config())
+        starts = clock.now() + timedelta(minutes=2)
+        agenda._agenda_events = [{"at": starts, "title": "Meeting", "minutes": 2}]
+        agenda._agenda_at = clock.now()
+        assert "in 2 minutes" in agenda.urgent_now()
+        clock.set_for_test(clock.now() + timedelta(minutes=3))
+        assert agenda.urgent_now() is None and agenda._agenda() == ""
 
         # The brief is owed once a day and the transcript is what says so.
         import argon.clock as _c

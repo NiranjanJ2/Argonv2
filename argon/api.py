@@ -23,6 +23,7 @@ from typing import Any
 #: Per-flush cap. A stuck client must not be able to fill the
 #: transcript with one request.
 APP_LOG_MAX_ENTRIES = 100
+APP_LOG_READ_MAX = 1000
 
 from flask import Flask, g, jsonify, request
 
@@ -529,9 +530,15 @@ def create_app(rt) -> Flask:
     @app.get("/v2/log")
     @require_token
     def v2_log_read():
+        try:
+            limit = int(request.args.get("limit", 200))
+        except ValueError:
+            limit = 0
+        if not 1 <= limit <= APP_LOG_READ_MAX:
+            return jsonify({"error": f"limit must be 1..{APP_LOG_READ_MAX}"}), 400
         rows = [{"at": e.at, **e.payload}
                 for e in rt.transcript.window(2) if e.kind == "app_log"]
-        return jsonify({"entries": rows[-int(request.args.get("limit", 200)):]})
+        return jsonify({"entries": rows[-limit:]})
 
     @app.post("/v2/brief/ack")
     @require_token
@@ -553,9 +560,9 @@ def create_app(rt) -> Flask:
         rows = (rt.transcript.since(since) if since is not None
                 else rt.transcript.window(2))
         spoken = [e for e in rows if e.kind in ("message_in", "message_out")]
-        # Capped like /v1. Without this `?since=0` returned the whole
-        # transcript in one response.
-        page = spoken[-MESSAGE_LIMIT:]
+        # Capped like /v1. A cursor reads forward (the first page after it, so
+        # nothing in the middle is skipped); the initial load wants the newest.
+        page = spoken[:MESSAGE_LIMIT] if since is not None else spoken[-MESSAGE_LIMIT:]
         return jsonify({"messages": [
             {"seq": e.seq, "role": "user" if e.kind == "message_in" else "assistant",
              "text": e.payload.get("text", ""), "at": e.at}
@@ -632,6 +639,7 @@ def _selftest() -> None:
         cfg = config.Config()
         cfg.api.token = "secret"
         rt = Runtime(cfg)
+        rt.add_channel(lambda text: None)
         app = create_app(rt)
         c = app.test_client()
         auth = {"Authorization": "Bearer secret"}
@@ -710,6 +718,24 @@ def _selftest() -> None:
         rt.transcript.append("message_out", text="later")
         newer = c.get(f"/v2/messages?since={seq}", headers=auth).get_json()["messages"]
         assert [m["text"] for m in newer] == ["later"], newer
+
+        # Cursor paging walks forward without losing the middle.
+        cur = rt.transcript.append("marker")
+        for i in range(MESSAGE_LIMIT + 5):
+            rt.transcript.append("message_out", text=f"p{i}")
+        r1 = c.get(f"/v2/messages?since={cur}", headers=auth).get_json()
+        assert [m["text"] for m in r1["messages"]] == [f"p{i}" for i in range(MESSAGE_LIMIT)]
+        assert r1["more"] is True
+        r2 = c.get(f"/v2/messages?since={r1['messages'][-1]['seq']}", headers=auth).get_json()
+        assert [m["text"] for m in r2["messages"]] == [f"p{i}" for i in range(MESSAGE_LIMIT, MESSAGE_LIMIT + 5)]
+        assert r2["more"] is False
+        first = c.get("/v2/messages", headers=auth).get_json()
+        assert first["messages"][-1]["text"] == f"p{MESSAGE_LIMIT + 4}", "initial page is newest"
+
+        for bad in ("abc", "0", "-1", str(APP_LOG_READ_MAX + 1), ""):
+            assert c.get(f"/v2/log?limit={bad}", headers=auth).status_code == 400, bad
+        assert c.get("/v2/log?limit=1", headers=auth).status_code == 200
+        assert c.get("/v2/log", headers=auth).status_code == 200
 
         # Ordinary bad input is a 400, never a 500. Each of these crashed.
         assert c.post("/v1/ios/override", json={"minutes": "abc"},

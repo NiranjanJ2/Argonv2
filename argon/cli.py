@@ -25,7 +25,8 @@ def cmd_gateway(args) -> int:
     discord = None
     if rt.cfg.discord.enabled and rt.cfg.discord.token:
         discord = DiscordChannel(rt.cfg.discord,
-                                 lambda text: rt.receive(text, source="discord"),
+                                 lambda text, reply: rt.receive(text, source="discord",
+                                                                reply_channel=reply),
                                  remember=rt.remember_discord_channel)
         discord.start()
         rt.add_channel(discord.send)

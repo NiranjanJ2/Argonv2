@@ -58,7 +58,7 @@ class Agent:
         self.tools = tools
         self.system = system
 
-    def turn(self, *, background: bool, extra: str = "") -> Outcome:
+    def turn(self, *, background: bool, extra: str = "", request: str = "") -> Outcome:
         """Run one turn to completion.
 
         *extra* is live state for the prompt tail. It is a parameter rather
@@ -69,23 +69,36 @@ class Agent:
         self._background = background
         self._went_quiet = False
         self._spoke_this_turn = False
+        self._say_terminal = False
         try:
-            return self._turn(background=background, extra=extra)
+            return self._turn(background=background, extra=extra, request=request)
         finally:
             # Scoped to the turn, not left set. say() consults this, and a flag
             # that outlives its turn silently gates the next caller.
             self._background = False
 
-    def _turn(self, *, background: bool, extra: str = "") -> Outcome:
+    def _turn(self, *, background: bool, extra: str = "", request: str = "") -> Outcome:
         out = Outcome()
         messages = context.build(self.t, self.system, extra=extra)
         schemas = self.tools.schemas(background=background)
+        if not background:
+            messages.append({"role": "user", "content":
+                             "This is an interactive turn. Answer only his current "
+                             "request below; earlier conversations are history, not "
+                             "pending instructions. After acting, acknowledge the "
+                             "result instead of resuming an older task.\n\n" + request})
 
         nudged = False
         for step in range(MAX_STEPS):
+            final_reply = not background and step == MAX_STEPS - 1
+            if final_reply:
+                messages.append({"role": "user", "content":
+                                 "Finish this turn now: reply briefly to his current "
+                                 "request using the results above. State any failure "
+                                 "or remaining work honestly. Do not call more tools."})
             try:
                 reply = provider.complete(
-                    self.cfg.provider, messages, tools=schemas,
+                    self.cfg.provider, messages, tools=[] if final_reply else schemas,
                     cap=self.cfg.monthly_cap_usd,
                 )
             except budget.BudgetExceeded as e:
@@ -115,7 +128,7 @@ class Agent:
                 # One nudge, inside this turn only; it never reaches the
                 # transcript.
                 if (not background and not reply.text.strip() and not out.spoke
-                        and not nudged and out.tools_used):
+                        and not nudged and out.tools_used and not final_reply):
                     nudged = True
                     messages.append({"role": "assistant", "content": None,
                                      "tool_calls": [], "_items": reply.items})
@@ -123,6 +136,10 @@ class Agent:
                                      "(Now reply to him — one or two sentences on what "
                                      "you did or found.)"})
                     continue
+                if not background and not reply.text.strip() and not out.spoke:
+                    out.error = "interactive turn ended without a reply"
+                    self.t.append("turn_truncated", summary=out.error)
+                    return out
                 out.text = reply.text
                 # Interactive: the text is the answer. Background: it was
                 # thinking, and thinking is not delivered.
@@ -132,8 +149,11 @@ class Agent:
                 # twice — which is what happened the first time Discord
                 # delivery started working.
                 if reply.text and not background and not out.spoke:
-                    self.say(reply.text)
-                    out.spoke = True
+                    result = self.say(reply.text)
+                    out.spoke = result == "sent"
+                    if not out.spoke:
+                        out.text = ""
+                        out.error = result
                 return out
 
             messages.append({
@@ -145,16 +165,24 @@ class Agent:
                 # transcript never stores it.
                 "_items": reply.items,
             })
+            stop_saying = ""
             for call_id, name, args in parse_calls(reply.tool_calls):
                 result = self.tools.call(name, args, background=background)
                 out.tools_used.append(name)
-                if name.split("<|")[0].strip() == "say" and not result.startswith("Error"):
-                    out.spoke = True
+                if name.split("<|")[0].strip() == "say":
+                    out.spoke = out.spoke or result == "sent"
+                    # Rephrasing cannot change time, a spent attention budget,
+                    # or a broken delivery channel. Don't pay for eight retries.
+                    if self._say_terminal:
+                        stop_saying = result
                 messages.append({
                     "role": "tool",
                     "tool_call_id": call_id,
                     "content": result,
                 })
+            if stop_saying:
+                out.error = stop_saying
+                return out
 
         out.error = f"stopped after {MAX_STEPS} tool steps"
         self.t.append("turn_truncated", summary=out.error)
@@ -230,10 +258,12 @@ class Agent:
                         "the action; announcing it is not going quiet. He was "
                         "not messaged.")
             if (wait := self._unanswered_gate()) is not None:
+                self._say_terminal = True
                 return self._blocked("too_soon_or_capped", wait)
 
         errors = self.deliver(text)
         if errors:
+            self._say_terminal = True
             self.t.append("undelivered", text=text, summary="; ".join(errors)[:200])
             return (f"NOT DELIVERED — {'; '.join(errors)[:200]}. He did not receive this. "
                     f"The channel is misconfigured; rewording will not help. "
@@ -335,7 +365,7 @@ class Agent:
     def receive(self, text: str, *, source: str = "ios", extra: str = "") -> Outcome:
         """He said something.  Record it, then answer."""
         self.t.append("message_in", text=text, source=source)
-        return self.turn(background=False, extra=extra)
+        return self.turn(background=False, extra=extra, request=text)
 
 
 
@@ -530,6 +560,60 @@ def _selftest() -> None:
         out = agent.receive("can you stop the block")
         assert delivered[count:] == ["Sent the release; it's coming off."], delivered[count:]
         assert not scripted, "exactly one nudge"
+
+        # Time/cap refusals end the turn; rephrasing does not buy permission.
+        agent._unanswered_gate = lambda: "Error: capped. Do not call say again."
+        scripted.append(provider.Reply(tool_calls=[
+            {"id": "blocked", "function": {"name": "say", "arguments": '{"text":"another nudge"}'}}]))
+        out = agent.turn(background=True)
+        assert not out.spoke and "capped" in out.error and not scripted
+        del agent._unanswered_gate
+
+        # Delivery failure is never counted as a successful turn or brief.
+        real_deliver = agent.deliver
+        agent.deliver = lambda text: ["channel down"]
+        agent._unanswered_gate = lambda: None
+        scripted.append(provider.Reply(tool_calls=[
+            {"id": "dead", "function": {"name": "say", "arguments": '{"text":"brief"}'}}]))
+        out = agent.turn(background=True)
+        assert not out.spoke and out.error.startswith("NOT DELIVERED")
+        scripted.append(provider.Reply(text="interactive reply"))
+        out = agent.receive("hello")
+        assert not out.spoke and not out.text and out.error.startswith("NOT DELIVERED")
+        agent.deliver = real_deliver
+        del agent._unanswered_gate
+
+        # Reserve the last step for an answer, even after a long tool loop.
+        rounds = []
+        def looping(*a, **kwargs):
+            rounds.append(kwargs["tools"])
+            if kwargs["tools"]:
+                return provider.Reply(tool_calls=[
+                    {"id": str(len(rounds)), "function": {"name": "unlock_phone", "arguments": "{}"}}])
+            return provider.Reply(text="The release is sent.")
+        provider.complete = looping
+        out = agent.receive("Unblock")
+        assert out.spoke and out.steps == MAX_STEPS and rounds[-1] == []
+        assert out.tools_used == ["unlock_phone"] * (MAX_STEPS - 1)
+
+        # A queued turn keeps its own request even after a newer one lands.
+        t.append("message_in", text="newer request")
+        def focused(cfg, messages, **kwargs):
+            assert messages[-1]["content"].endswith("original request")
+            return provider.Reply(text="Acknowledged.")
+        provider.complete = focused
+        assert agent.turn(background=False, request="original request").spoke
+
+        # A reasoning-only final call is an observable error, not silent success.
+        def empty_final(cfg, messages, **kwargs):
+            if kwargs["tools"]:
+                return provider.Reply(tool_calls=[
+                    {"id": "loop", "function": {"name": "unlock_phone", "arguments": "{}"}}])
+            return provider.Reply()
+        provider.complete = empty_final
+        out = agent.receive("Unblock")
+        assert not out.spoke and out.error == "interactive turn ended without a reply"
+        assert t.last("turn_truncated").payload["summary"] == out.error
 
         # A provider failure never reaches him.
         def boom(*a, **k):

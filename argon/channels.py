@@ -54,7 +54,7 @@ def chunk(text: str, limit: int = MAX_CHARS) -> list[str]:
 class DiscordChannel:
     name = "discord"
 
-    def __init__(self, cfg: DiscordConfig, on_message: Callable[[str], None],
+    def __init__(self, cfg: DiscordConfig, on_message: Callable[[str, Callable[[str], None]], None],
                  remember: Callable[[str], None] | None = None) -> None:
         self.cfg = cfg
         self.on_message = on_message
@@ -85,23 +85,7 @@ class DiscordChannel:
 
         @client.event
         async def on_message(message):  # noqa: ANN001
-            if message.author == client.user:
-                return
-            # Allow-list is the only authorisation. Empty means nobody, not
-            # everybody — an open bot on a public server answers strangers.
-            if str(message.author.id) not in self.cfg.allow_from:
-                return
-            # Only follow him into a private channel. Argon's briefs name his
-            # assignments and his evening; one message from a public guild
-            # channel would have redirected the next one there.
-            private = getattr(message.guild, "id", None) is None
-            if private and self._channel_id != message.channel.id:
-                self._channel_id = message.channel.id
-                if self.remember:
-                    self.remember(str(message.channel.id))
-            text = message.content.strip()
-            if text:
-                await asyncio.to_thread(self.on_message, text)
+            await self.handle(message)
 
         def run() -> None:
             self._loop = asyncio.new_event_loop()
@@ -116,11 +100,34 @@ class DiscordChannel:
 
         threading.Thread(target=run, daemon=True, name="discord").start()
 
+    async def handle(self, message) -> None:  # noqa: ANN001
+        if message.author == self._client.user:
+            return
+        # Allow-list is the only authorisation. Empty means nobody, not
+        # everybody — an open bot on a public server answers strangers.
+        if str(message.author.id) not in self.cfg.allow_from:
+            return
+        cid = message.channel.id
+        # Only follow him into a private channel. Argon's briefs name his
+        # assignments and his evening; one message from a public guild
+        # channel would have redirected the next one there.
+        private = getattr(message.guild, "id", None) is None
+        if private and self._channel_id != cid:
+            self._channel_id = cid
+            if self.remember:
+                self.remember(str(cid))
+        text = message.content.strip()
+        if text:
+            # The reply is pinned to this message's channel, never re-read
+            # from mutable state, so a later message can't redirect it.
+            await asyncio.to_thread(self.on_message, text,
+                                    lambda reply: self.send(reply, channel_id=cid))
+
     #: How long the agent thread waits for Discord to accept a message. Long
     #: enough for a REST round trip, short enough not to stall a turn.
     SEND_TIMEOUT_S = 20.0
 
-    def send(self, text: str) -> None:
+    def send(self, text: str, channel_id: int | None = None) -> None:
         """Called from the agent's thread, so hop to Discord's loop and wait.
 
         Waiting matters: the caller has to learn whether this actually landed.
@@ -129,10 +136,11 @@ class DiscordChannel:
         """
         if not (self._loop and self._client):
             raise RuntimeError("discord is not connected")
-        if not self._channel_id:
+        channel_id = channel_id or self._channel_id
+        if not channel_id:
             raise RuntimeError("no discord channel known yet; set discord.channel_id")
 
-        client, channel_id = self._client, self._channel_id
+        client = self._client
 
         async def deliver() -> None:
             # get_channel only knows guild channels and cached private ones, so
@@ -166,7 +174,8 @@ def _selftest() -> None:
     assert all(not p.startswith("ord") for p in chunk(words))
 
     seen: list[str] = []
-    ch = DiscordChannel(DiscordConfig(token="t", allow_from=["1"]), seen.append)
+    ch = DiscordChannel(DiscordConfig(token="t", allow_from=["1"]),
+                        lambda text, reply: seen.append(text))
     # Nowhere to send is an error, never a silent drop.
     try:
         ch.send("nothing is connected yet")
@@ -177,11 +186,65 @@ def _selftest() -> None:
     assert ch.ready is False and ch.error is None, "starts neither up nor failed"
 
     # A configured channel id is used before he has ever spoken.
-    seeded = DiscordChannel(DiscordConfig(token="t", channel_id="1477811435487891629"),
-                            seen.append)
+    noop = lambda text, reply: None  # noqa: E731
+    seeded = DiscordChannel(DiscordConfig(token="t", channel_id="1477811435487891629"), noop)
     assert seeded._channel_id == 1477811435487891629
-    assert DiscordChannel(DiscordConfig(token="t", channel_id="nonsense"),
-                          seen.append)._channel_id is None
+    assert DiscordChannel(DiscordConfig(token="t", channel_id="nonsense"), noop)._channel_id is None
+
+    # Inbound: replies go to the incoming channel; only DMs become the proactive one.
+    from types import SimpleNamespace as NS
+
+    def msg(author, channel, guild=None, content="hi"):
+        return NS(author=NS(id=author), channel=NS(id=channel),
+                  guild=NS(id=guild) if guild else None, content=content)
+
+    sent, saved = [], []
+
+    def on_message(text, reply):
+        reply("pong")
+
+    dm = DiscordChannel(DiscordConfig(token="t", allow_from=["1"], channel_id="500"),
+                        on_message, remember=saved.append)
+    dm._client = NS(user="bot")
+    dm.send = lambda text, channel_id=None: sent.append((text, channel_id))
+    asyncio.run(dm.handle(msg(1, 700)))                    # allowed DM
+    assert sent == [("pong", 700)] and saved == ["700"] and dm._channel_id == 700, (sent, saved)
+    asyncio.run(dm.handle(msg(1, 900, guild=42)))          # allowed guild message
+    assert sent[-1] == ("pong", 900), sent
+    assert saved == ["700"] and dm._channel_id == 700, "guild must not become the DM target"
+    asyncio.run(dm.handle(msg(2, 701)))                    # unauthorised author
+    asyncio.run(dm.handle(msg("bot", 702)))                # self; "bot" not allowed anyway
+    dm._client.user = NS(id=1)
+    own = msg(1, 703)
+    own.author = dm._client.user
+    asyncio.run(dm.handle(own))                           # genuine self-message
+    assert len(sent) == 2 and saved == ["700"], (sent, saved)
+    # Exercise send's real loop hop and explicit destination without Discord.
+    loop = asyncio.new_event_loop()
+    worker = threading.Thread(target=loop.run_forever)
+    worker.start()
+    landed, fetched = [], []
+    class FakeChannel:
+        async def send(self, text):
+            landed.append(text)
+    class FakeClient:
+        def get_channel(self, channel_id):
+            assert channel_id == 900, "use the pinned reply channel, not the saved DM"
+            return None
+        async def fetch_channel(self, channel_id):
+            fetched.append(channel_id)
+            return FakeChannel()
+    real_send = DiscordChannel(DiscordConfig(channel_id="500"), noop)
+    real_send._loop, real_send._client = loop, FakeClient()
+    try:
+        real_send.send("reply", channel_id=900)
+        assert fetched == [900] and landed == ["reply"]
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        worker.join(timeout=2)
+        assert not worker.is_alive()
+        loop.close()
+
     print("channels selftest ok")
 
 

@@ -18,11 +18,13 @@ call, which was a known cost in the old system and never fixed.
 
 from __future__ import annotations
 
+import base64
 import json
 import hashlib
 import re
+import threading
 from datetime import UTC, datetime, timedelta
-from functools import lru_cache
+from html.parser import HTMLParser
 from typing import Any
 
 from argon import clock, config
@@ -185,8 +187,41 @@ def _credentials(account: str):
     raise GoogleUnavailable(f"Google account '{account}' has no usable credentials.")
 
 
-@lru_cache(maxsize=32)
+# One service per thread. A googleapiclient service owns an httplib2.Http, which
+# is not thread-safe: two threads sharing its SSL socket interleave records and
+# the journal shows DECRYPTION_FAILED_OR_BAD_RECORD_MAC. Thread-local cache keeps
+# the "no discovery round trip per call" win without sharing a connection.
+#
+# Invalidation is the token file's signature, checked on every call: `argon
+# google-auth` runs in a separate CLI process and cannot reach this one's memory,
+# but it does rewrite the file. If it changes during a build, rebuild on the next
+# call too. One extra build after a credential refresh is cheap and avoids caching
+# an old service under a newly reauthorised token's signature.
+_local = threading.local()
+
+
+def _token_signature(account: str):
+    try:
+        st = token_path(account).stat()
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size, st.st_ino)
+
+
 def _service(account: str, api: str, version: str):
+    if not hasattr(_local, "cache"):
+        _local.cache = {}
+    key = (account, api, version)
+    entry = _local.cache.get(key)
+    signature = _token_signature(account)
+    if entry and entry[0] == signature:
+        return entry[1]
+    svc = _build_service(account, api, version)
+    _local.cache[key] = (signature, svc)
+    return svc
+
+
+def _build_service(account: str, api: str, version: str):
     # Credentials first, import second. Reversed, a box without the client
     # libraries reports "No module named 'googleapiclient'" for an account that
     # was simply never connected — which sends you installing packages that are
@@ -210,7 +245,6 @@ def authorise(account: str, port: int = 8765) -> str:
     flow = InstalledAppFlow.from_client_secrets_file(str(client_secret_path()), wanted)
     creds = flow.run_local_server(port=port, open_browser=False)
     token_path(account).write_text(creds.to_json())
-    _service.cache_clear()
     return f"connected {account}"
 
 
@@ -753,8 +787,109 @@ def search_mail(account: str, query: str, limit: int = 5) -> str:
             userId="me", id=m["id"], format="metadata",
             metadataHeaders=["From", "Subject", "Date"]).execute()
         h = {x["name"]: x["value"] for x in msg["payload"].get("headers", [])}
-        out.append(f"- {h.get('Subject', '(no subject)')} — {h.get('From', '?')}")
+        out.append(f"- {h.get('Subject', '(no subject)')} — {h.get('From', '?')}"
+                   f" [id: {m['id']}]")
     return "\n".join(out)
+
+
+#: Output bounds for read_mail. The text is untrusted and goes to the model.
+MAIL_BODY_CHARS = 6000
+MAIL_HEADER_CHARS = 300
+MAIL_MAX_ATTACHMENTS = 20
+_MAIL_HEADERS = ("From", "To", "Cc", "Subject", "Date")
+
+
+class _Text(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.out: list[str] = []
+        self._skip = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("script", "style"):
+            self._skip += 1
+        elif tag in ("br", "p", "div", "tr", "li"):
+            self.out.append("\n")
+
+    def handle_endtag(self, tag):
+        if tag in ("script", "style") and self._skip:
+            self._skip -= 1
+
+    def handle_data(self, data):
+        if not self._skip:
+            self.out.append(data)
+
+
+def _html_text(html: str) -> str:
+    p = _Text()
+    p.feed(html)
+    p.close()
+    return "".join(p.out)
+
+
+def _decode_part(part: dict[str, Any]) -> str:
+    data = (part.get("body") or {}).get("data") or ""
+    raw = base64.urlsafe_b64decode(data + "=" * (-len(data) % 4))
+    ctype = next((h["value"] for h in part.get("headers", [])
+                  if h["name"].lower() == "content-type"), "")
+    m = re.search(r'charset="?([\w.-]+)', ctype, re.I)
+    try:
+        return raw.decode(m.group(1) if m else "utf-8", errors="replace")
+    except LookupError:
+        return raw.decode("utf-8", errors="replace")
+
+
+def _walk_mail(part: dict[str, Any], found: dict[str, list], depth: int = 0) -> None:
+    if depth > 10:  # a hostile message can nest MIME arbitrarily deep
+        return
+    body = part.get("body") or {}
+    mime = part.get("mimeType", "")
+    if part.get("filename") or body.get("attachmentId"):
+        found["files"].append({"attachmentId": body.get("attachmentId", ""),
+                               "filename": part.get("filename", ""),
+                               "mimeType": mime, "size": body.get("size", 0)})
+    elif mime in ("text/plain", "text/html") and body.get("data"):
+        found[mime].append(_decode_part(part))
+    for sub in part.get("parts") or []:
+        _walk_mail(sub, found, depth + 1)
+
+
+def _clean(value: str, limit: int) -> str:
+    return re.sub(r"[\x00-\x1f\x7f]+", " ", str(value))[:limit]
+
+
+def read_mail(account: str, message_id: str) -> str:
+    """One message in full: headers, text body, attachment metadata. Read-only.
+
+    The result is attacker-controlled text; the caller fences it as untrusted.
+    Attachment contents are not fetched, only listed with their attachmentId.
+    """
+    if not re.fullmatch(r"[0-9A-Za-z_-]{1,64}", message_id or ""):
+        return "That is not a Gmail message id."
+    msg = _service(account, "gmail", "v1").users().messages().get(
+        userId="me", id=message_id, format="full").execute()
+    payload = msg.get("payload") or {}
+    h = {x["name"].lower(): x["value"] for x in payload.get("headers", [])}
+    found: dict[str, list] = {"files": [], "text/plain": [], "text/html": []}
+    _walk_mail(payload, found)
+    body = "\n".join(found["text/plain"]).strip()
+    if not body:
+        body = _html_text("\n".join(found["text/html"])).strip()
+    body = re.sub(r"\n{3,}", "\n\n", body)
+    lines = [f"{n}: {_clean(h[n.lower()], MAIL_HEADER_CHARS)}"
+             for n in _MAIL_HEADERS if n.lower() in h]
+    lines.append(f"Message id: {_clean(message_id, 64)}")
+    files = found["files"]
+    for f in files[:MAIL_MAX_ATTACHMENTS]:
+        lines.append(f"Attachment: name={_clean(f['filename'], 150)!r} "
+                     f"mime={_clean(f['mimeType'], 80)} size={f['size']} "
+                     f"attachmentId={_clean(f['attachmentId'], 200)}")
+    if len(files) > MAIL_MAX_ATTACHMENTS:
+        lines.append(f"(+{len(files) - MAIL_MAX_ATTACHMENTS} more attachments)")
+    if len(body) > MAIL_BODY_CHARS:
+        body = body[:MAIL_BODY_CHARS] + "\n(truncated)"
+    lines += ["", body or "(no text body)"]
+    return "\n".join(lines)
 
 
 def _selftest() -> None:
@@ -959,6 +1094,115 @@ def _selftest() -> None:
         write_token("empty", [])
         assert "no usable scopes" in status(["empty"])
         assert granted("missing-entirely") == set()
+
+
+        # -- per-thread services, fake build, no network --------------------
+        import sys
+        import types
+        built: list[object] = []
+        fake = types.ModuleType("googleapiclient.discovery")
+        fake.build = lambda *a, **k: built.append(object()) or built[-1]
+        saved = {k: sys.modules.get(k) for k in ("googleapiclient", "googleapiclient.discovery")}
+        sys.modules["googleapiclient"] = types.ModuleType("googleapiclient")
+        sys.modules["googleapiclient.discovery"] = fake
+        real_creds = globals()["_credentials"]
+        globals()["_credentials"] = lambda account: object()
+        try:
+            a = _service("work", "gmail", "v1")
+            assert _service("work", "gmail", "v1") is a, "same thread reuses its service"
+            seen: list[object] = []
+            t = threading.Thread(target=lambda: seen.append(_service("work", "gmail", "v1")))
+            t.start(); t.join()
+            assert seen[0] is not a, "another thread must not share the connection"
+            # An external reauthorisation (the CLI process) rewrites the token
+            # file; no local counter is touched, yet the service must rebuild.
+            token_path("work").write_text(json.dumps({"scopes": [], "rotated": 1}))
+            b = _service("work", "gmail", "v1")
+            assert b is not a, "external token rewrite must rebuild the service"
+            assert _service("work", "gmail", "v1") is b, "unchanged token does not rebuild"
+            assert _service("work", "gmail", "v1") is not seen[0]
+            n = len(built)
+            _service("work", "gmail", "v1")
+            assert len(built) == n, "no rebuild without a token change"
+            # A token rewrite during construction must not be mistaken for the
+            # token used by the service just built.
+            def rotate_during_build(*a, **k):
+                token_path("race").write_text('{"rotated": true}')
+                built.append(object())
+                return built[-1]
+            fake.build = rotate_during_build
+            old = _service("race", "gmail", "v1")
+            fake.build = lambda *a, **k: built.append(object()) or built[-1]
+            assert _service("race", "gmail", "v1") is not old
+        finally:
+            globals()["_credentials"] = real_creds
+            for k, v in saved.items():
+                if v is None:
+                    sys.modules.pop(k, None)
+                else:
+                    sys.modules[k] = v
+
+        # -- Gmail read, via a fake service ---------------------------------
+        def b64(t: str) -> str:
+            return base64.urlsafe_b64encode(t.encode()).decode().rstrip("=")
+
+        class _Call:
+            def __init__(self, v): self.v = v
+            def execute(self): return self.v
+
+        class _Msgs:
+            def __init__(self, full): self.full, self.calls = full, []
+            def list(self, **k): return _Call({"messages": [{"id": "m1"}]})
+            def get(self, **k):
+                self.calls.append(k)
+                if k["format"] == "metadata":
+                    return _Call({"payload": {"headers": [
+                        {"name": "Subject", "value": "Lab"}, {"name": "From", "value": "j@x"}]}})
+                return _Call(self.full)
+
+        def fake_gmail(full):
+            msgs = _Msgs(full)
+            svc = types.SimpleNamespace(users=lambda: types.SimpleNamespace(messages=lambda: msgs))
+            return svc, msgs
+
+        full = {"payload": {
+            "mimeType": "multipart/mixed",
+            "headers": [{"name": "Subject", "value": "Lab\nBcc: evil"},
+                        {"name": "From", "value": "Mr J <j@x>"}],
+            "parts": [
+                {"mimeType": "multipart/alternative", "parts": [
+                    {"mimeType": "text/plain", "body": {"data": b64("Bring goggles")}},
+                    {"mimeType": "text/html", "body": {"data": b64("<p>HTML only</p>")}}]},
+                {"mimeType": "application/pdf", "filename": "lab.pdf",
+                 "body": {"attachmentId": "ATT1", "size": 42}}]}}
+        svc, msgs = fake_gmail(full)
+        real_service = globals()["_service"]
+        globals()["_service"] = lambda *a: svc
+        try:
+            assert "[id: m1]" in search_mail("work", "lab"), "search must expose message ids"
+            got = read_mail("work", "m1")
+            assert "Bring goggles" in got and "HTML only" not in got, "plain text preferred"
+            assert "Subject: Lab Bcc: evil" in got, "header newlines cannot forge headers"
+            assert "name='lab.pdf' mime=application/pdf size=42 attachmentId=ATT1" in got, got
+            assert msgs.calls[-1] == {"userId": "me", "id": "m1", "format": "full"}
+            assert "not a Gmail message id" in read_mail("work", "../x")
+
+            html_only = {"payload": {"mimeType": "text/html", "headers": [],
+                                     "body": {"data": b64("<style>x{}</style><p>Hi</p><script>bad()</script><div>there</div>")}}}
+            svc, msgs = fake_gmail(html_only)
+            got = read_mail("work", "m2")
+            assert "Hi" in got and "there" in got and "bad()" not in got and "x{}" not in got, got
+
+            big = {"payload": {"mimeType": "multipart/mixed", "headers": [],
+                               "parts": [{"mimeType": "text/plain", "body": {"data": b64("a" * 20000)}}]
+                               + [{"mimeType": "x/y", "filename": f"f{i}", "body": {"attachmentId": f"A{i}"}}
+                                  for i in range(30)]}}
+            svc, msgs = fake_gmail(big)
+            got = read_mail("work", "m3")
+            assert len(got) < MAIL_BODY_CHARS + 6000 and "(truncated)" in got
+            assert got.count("Attachment:") == MAIL_MAX_ATTACHMENTS and "+10 more" in got
+        finally:
+            globals()["_service"] = real_service
 
         del os.environ["ARGON_HOME"]
     print("google selftest ok")

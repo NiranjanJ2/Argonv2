@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-10-07
+
+### Fixed
+
+- Reply to Discord messages in the conversation they came from. Keep proactive
+  delivery and other turns independent of that reply destination.
+- End futile retries after a message is refused by spacing/caps or delivery
+  fails; only a successful send counts as spoken or as a delivered brief.
+- Focus interactive turns on their triggering request and reserve the last
+  model step for a reply, recording an error if no answer is produced.
+- Give each Google worker its own HTTP connection and rebuild cached services
+  after a token file changes, including external reauthorisation.
+- Serialize Classroom imports, throttle failed attempts, notify board edits,
+  and calculate cached calendar countdowns from the current clock.
+- Read email bodies and attachment metadata using IDs exposed by mail search.
+- Page message cursors forward without skipping history, validate log limits,
+  and escape external text inside context/tool delimiters.
+
 ## 2026-09-22
 
 ### Fixed
