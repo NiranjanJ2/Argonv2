@@ -812,6 +812,27 @@ class Runtime:
                       "priority": {"type": "string"}},
               required=["task"])
 
+        def plan_tonight(focus: list[str], start_at: str) -> str:
+            from argon import planner
+
+            if (not isinstance(focus, list) or len(focus) > planner.MAX_ITEMS
+                    or any(not isinstance(tid, str) or not (task := store.task(tid))
+                           or task.done for tid in focus)):
+                return "Error: focus must contain open task ids from list_tasks"
+            if planner.parse_hhmm(start_at) is None:
+                return "Error: start_at must be HH:MM"
+            result = planner.apply(self, {"focus": focus, "start_at": start_at})
+            self.wake_phone("plan updated")
+            return f"Tonight: {', '.join(result['focus']) or 'no focus tasks'}; start {result['routine']['start_at']}"
+
+        t.add("plan_tonight", "Set tonight's focus and start time after he gives "
+              "a plan or tells you his capacity. Use task ids from list_tasks. "
+              "This changes no due dates and completes nothing.",
+              plan_tonight,
+              params={"focus": {"type": "array", "items": {"type": "string"}},
+                      "start_at": {"type": "string", "description": "HH:MM local time"}},
+              required=["focus", "start_at"], background=False)
+
         t.add("remember",
               "Store something about him that will still be true later — the "
               "shape of his weeks, a standing commitment, a preference. Not a "
@@ -1257,14 +1278,12 @@ class Runtime:
         that relied on it noticing either skipped the brief or sent three.
         """
         return (
-            "THIS TURN IS THE AFTER-SCHOOL BRIEF. Send exactly one message, "
-            "now, using say. It is a one-way secretary brief: what is due "
-            "today and tomorrow, any real calendar conflict, and anything a "
-            "teacher posted that is not on the board. Two or three items, "
-            "chronological. Do not ask him anything, do not offer to send it, "
-            "do not propose a plan, and do not list the overdue backlog. If "
-            "there is genuinely nothing worth saying, say nothing and call no "
-            "tool — a brief with no content is worse than silence."
+            "THIS TURN IS THE AFTER-SCHOOL BRIEF. If a verified change "
+            "affects tonight, send one short sentence with the most useful "
+            "fact or next step using say. The full list is on Today; do not "
+            "paste it into a notification or imply your summary is complete. "
+            "Do not repeat an earlier brief. If nothing changes a decision, "
+            "say nothing and call no tool."
         )
 
     def _announce_budget_stop(self) -> bool:
@@ -1371,7 +1390,15 @@ def _selftest() -> None:
 
         assert "Open tasks: none." in rt.live_state()
         assert rt._agenda_at is not None, "the agenda is fetched, not left to a tool"
-        rt.store.add_task("AP Chem pset", due="2026-09-16")
+        pset = rt.store.add_task("AP Chem pset", due="2026-09-16")
+        from argon import planner
+        assert "Error" in rt.tools.call(
+            "plan_tonight", {"focus": [pset.id], "start_at": "tomorrow"}, background=False)
+        assert planner.last_planned(rt.store) is None
+        assert "AP Chem pset" in rt.tools.call(
+            "plan_tonight", {"focus": [pset.id], "start_at": "20:30"}, background=False)
+        assert planner.focus(rt.store) == [pset.id]
+        assert planner.start_time(rt.store) == "20:30"
         rt.store.remember("practice Tuesdays", standing=True)
         state = rt.live_state()
         assert "AP Chem pset" in state and "practice Tuesdays" in state

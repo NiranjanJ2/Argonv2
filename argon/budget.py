@@ -25,8 +25,9 @@ from dataclasses import dataclass
 from argon import clock, config
 
 #: dollars per million tokens: (input, output, cached input). Checked against
-#: developers.openai.com/api/docs/pricing on 2026-09-22.
+#: developers.openai.com/api/docs/pricing; Terra checked 2026-10-28.
 PRICES: dict[str, tuple[float, float, float]] = {
+    "gpt-6.1-terra": (1.00, 5.00, 0.05),
     "gpt-6-luna": (0.10, 0.50, 0.01),
     "gpt-5.6-luna": (0.20, 0.75, 0.02),
     "gpt-5.6-terra": (1.25, 10.00, 0.125),
@@ -223,6 +224,9 @@ def _selftest() -> None:
         assert abs(wrote - 6_000 * 0.125 / 1e6) < 1e-9, wrote
         reused = cost_of("gpt-6-luna", Usage(prompt=6_000, cached=6_000))
         assert abs(reused - 6_000 * 0.01 / 1e6) < 1e-9, reused
+        assert cost_of("gpt-6.1-terra", Usage(prompt=1_000_000)) == 1.0
+        assert cost_of("gpt-6.1-terra", Usage(prompt=1_000_000, cached=1_000_000)) == 0.05
+        assert cost_of("gpt-6.1-terra", Usage(completion=1_000_000)) == 5.0
 
         # An unlisted model is charged at the dearest known rate, not zero.
         # Charging zero made a one-character typo in config.json silently

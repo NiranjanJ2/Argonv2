@@ -218,22 +218,6 @@ class Agent:
         text = strip_ids((text or "").strip())
         if not text:
             return "Error: empty message not sent"
-        # Questions. He wants a routine, not an interview: a quarter of
-        # everything Argon said carried one, and the shapes were "want the
-        # after-school brief now?", "Quick brief or full todo list?" and two
-        # clarifications in a row before setting a lock, which ended in "Dude
-        # just figure it out". The prompt has forbidden this throughout.
-        if asks_a_question(text):
-            if getattr(self, "_background", False):
-                return self._blocked("question_unprompted", "Error: not sent. An unprompted message may not ask him "
-                        "anything — he did not start this conversation, so there "
-                        "is nothing he owes an answer to. State it, act on the "
-                        "sensible default, or say nothing.")
-            if last_message_was_a_question(self.t):
-                return self._blocked("question_twice", "Error: not sent. Your last message already asked him "
-                        "something and this asks again. Take the most reasonable "
-                        "reading and act on it; he can correct you in one word.")
-
         # An invented absence is the one error he cannot catch: an invented
         # task he notices, an invented "nothing due" he does not. The prompt
         # has forbidden this from the first draft and on 20 Sep it still said
@@ -470,24 +454,6 @@ def unmentioned_live_work(text: str, tasks: list) -> list:
 
 
 
-def asks_a_question(text: str) -> bool:
-    """Whether the message puts a question to him.
-
-    A question mark inside a quoted assignment title is not Argon asking
-    anything, so the mark has to end a sentence rather than merely appear.
-    """
-    return bool(re.search(r"\?(?:\s|[\)\]\u201d\"'])*$", text.strip(), re.M))
-
-
-def last_message_was_a_question(transcript) -> bool:
-    for e in reversed(transcript.window(1)):
-        if e.kind == "message_in":
-            return False
-        if e.kind == "message_out":
-            return asks_a_question(e.payload.get("text") or "")
-    return False
-
-
 def _selftest() -> None:
     """Run with ``python -m argon.agent``.  Uses a fake provider, no network."""
     import os
@@ -715,31 +681,24 @@ def _selftest() -> None:
     assert a3.say("Marked InQuizitive Ch 6 done.") == "sent"
     assert a3.say("Nice — I marked it done and added a note.").startswith("Error")
 
-    # He wants a routine, not an interview. These are his real messages.
-    assert asks_a_question("Niranjan — want the after-school brief now?")
-    assert asks_a_question("Quick brief or full todo list?")
-    assert asks_a_question("Do you mean 8:30 PM tonight, and for how many minutes?")
-    assert not asks_a_question("Two things due tonight.")
-    # A question mark inside a title is not Argon asking anything.
-    assert not asks_a_question('Read "Why We Crave Horror Movies?" is on the board.')
-
     t5 = Transcript(Path(tmp) / "asking.db")
     a6 = Agent(cfg, t5, store, Tools(t5), "SYS")
     a6.deliver = lambda text: []
     a6.urgent_now = lambda: "event starting"      # past the spacing rule
 
-    # Unprompted, it may not ask him anything at all.
+    # A useful question may be sent once; spacing still prevents a barrage.
     a6._background, a6._went_quiet, a6._spoke_this_turn = True, False, False
-    assert a6.say("want the after-school brief now?").startswith("Error")
+    assert a6.say("What changed about tonight?") == "sent"
     a6._spoke_this_turn = False
-    assert a6.say("Two things due tonight.") == "sent"
+    a6.urgent_now = lambda: None
+    assert a6.say("Another question?").startswith("Error")
 
-    # Answering him, one question is fine; two in a row is the interview.
+    # Interactive questions are judged in context, not blocked by punctuation.
     t5.append("message_in", text="can you start blocking at 8:30")
     a6._background, a6._spoke_this_turn = False, False
     assert a6.say("Do you mean 8:30 tonight?") == "sent"
     a6._spoke_this_turn = False
-    assert a6.say("And for how many minutes?").startswith("Error")
+    assert a6.say("And for how many minutes?") == "sent"
 
     # An invented absence is the error he cannot catch. These are the real
     # message from 20 Sep and the answers that must still get through.

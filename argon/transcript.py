@@ -11,7 +11,7 @@ shaped this way:
 **The prompt cache works by construction.**  Rows are immutable and only ever
 appended, so yesterday seals at midnight and today only grows at the end.  A
 context built by walking rows oldest-first is byte-stable across ticks, which is
-what makes a five-minute cadence cost $4 a month instead of $11.  The previous
+what keeps a five-minute cadence affordable. The previous
 system re-rendered a digest on every call and would have missed cache every
 time.
 

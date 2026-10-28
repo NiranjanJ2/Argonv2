@@ -1,9 +1,8 @@
 """Turn the transcript into the message list sent to the model.
 
 The whole cost model rests on one property: **everything before the tail is
-byte-identical from one tick to the next.**  At $0.20/M fresh against $0.02/M
-cached, a stable prefix is the difference between roughly $4 and roughly $11 a
-month at a five-minute cadence.  ``_selftest`` asserts that property directly,
+byte-identical from one tick to the next.**  Cached input is much cheaper than
+fresh input. ``_selftest`` asserts that property directly,
 because it is the kind of thing that breaks silently and only shows up on a
 bill.
 
@@ -15,7 +14,7 @@ Layout::
 
 **The prefix is invalidated once a day, at midnight**, when ``window(days)``
 drops the oldest day and every message shifts. That is one full-price call per
-day — about a tenth of a cent — and it is deliberate: the alternative is
+day, and it is deliberate: the alternative is
 carrying a day he no longer cares about in order to keep a cache warm. The
 first tick after midnight will cost roughly three times a warm one, which is
 normal and not a sign the prefix is drifting. ``budget.cached_fraction`` is the

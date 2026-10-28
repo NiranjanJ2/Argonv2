@@ -85,20 +85,15 @@ class Provider:
 
     api_key: str = ""
     api_base: str = "https://api.openai.com/v1"
-    model: str = "gpt-6-luna"
+    model: str = "gpt-6.1-terra"
     #: Used when the primary returns a retryable failure.  Keep it on the same
     #: provider: pinning a background model to a *different* one is what caused
     #: a week-long silent outage when that model was retired and chat kept
     #: working, so nothing looked broken.
     fallback_model: str = "gpt-5-mini"
     timeout_s: float = 90.0
-    #: How hard the model thinks before answering. Argon reads a board that is
-    #: already rendered for it, picks a tool or none, and writes two sentences —
-    #: work that does not need deep reasoning, and the default depth was costing
-    #: eight to twenty-six seconds on questions as simple as "nothing else due
-    #: today right?". Empty string omits the parameter for endpoints that reject
-    #: it.
-    reasoning_effort: str = "low"
+    #: Enough room to reconcile the board and an evening that changed.
+    reasoning_effort: str = "medium"
 
 
 @dataclass

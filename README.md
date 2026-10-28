@@ -42,10 +42,9 @@ Three things follow, and they are the whole design:
 
 **The prompt cache works by construction.** Rows are immutable and only ever
 appended, so everything before the last spoken turn is byte-identical from one
-tick to the next. Cached input is $0.01/M against $0.10/M fresh on gpt-6-luna; at a
-five-minute cadence that is ~$3/month instead of ~$11. `context.py`'s self-check
-asserts the prefix does not drift, because it breaks silently and you find out
-on a bill.
+tick to the next. GPT-6.1 Terra cached input is priced at 5% of fresh input;
+`context.py`'s self-check asserts the prefix does not drift, because a cache
+miss breaks this cost model silently.
 
 The prefix is invalidated once a day at midnight, when the two-day window drops
 its oldest day. That is one full-price call per day, on purpose — keeping the
