@@ -59,6 +59,44 @@ private let stateJSON = """
 // MARK: - the outbox
 
 final class OutboxTests: XCTestCase {
+  func testReleaseScopeIsBackwardCompatible() throws {
+    let old = try JSONDecoder().decode(ArgonState.self, from: Data(#"{"release":{"until":"2026-10-29T07:00:00Z","version":1}}"#.utf8))
+    let scoped = try JSONDecoder().decode(ArgonState.self, from: Data(#"{"release":{"until":"2026-10-29T07:00:00Z","version":2,"scope":"argon"}}"#.utf8))
+    XCTAssertNil(old.release?.scope)
+    XCTAssertEqual(scoped.release?.scope, "argon")
+  }
+  func testOldFocusRequestDoesNotStartABlockAfterReconnect() async throws {
+    StubProtocol.reset()
+    let client = ArgonClient(base: URL(string: "http://stub")!, token: "t",
+                             session: StubProtocol.session)
+    let old = PendingWrite(.start(taskID: "t1"), created: Date().addingTimeInterval(-360))
+    do {
+      try await client.apply(old)
+      XCTFail("A stale start must not be sent")
+    } catch let error as ArgonClient.Failure {
+      XCTAssertEqual(error, .expiredFocus)
+    }
+    XCTAssertTrue(StubProtocol.seen.isEmpty)
+  }
+  func testBreakAndResumeCarryTheSameExpiry() async throws {
+    var requests: [(String, String, String?, Bool?)] = []
+    StubProtocol.handler = { request in
+      let data = request.httpBody ?? request.httpBodyStream.map(readAll) ?? Data()
+      let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+      requests.append((request.url!.path, body?["until"] as? String ?? "", request.value(forHTTPHeaderField: "Idempotency-Key"), body?["plan_after"] as? Bool))
+      return (200, Data(#"{"ok":true}"#.utf8))
+    }
+    let client = ArgonClient(base: URL(string: "http://stub")!, token: "t",
+                             session: StubProtocol.session)
+    let expiry = "2026-10-29T14:00:00Z"
+    try await client.apply(PendingWrite(.rest(until: expiry, planAfter: true)))
+    try await client.apply(PendingWrite(.resume(until: expiry)))
+    XCTAssertEqual(requests.map { $0.0 }, ["/v2/rest", "/v2/resume"])
+    XCTAssertEqual(requests.map { $0.1 }, [expiry, expiry])
+    XCTAssertTrue(requests.allSatisfy { $0.2 != nil })
+    XCTAssertEqual(requests.first?.3, true)
+  }
+
   func testWriteIDIsSentAsIdempotencyKey() async throws {
     var received: String?
     StubProtocol.handler = { request in
@@ -188,6 +226,16 @@ final class StoreTests: XCTestCase {
   }
 
   override func setUp() { StubProtocol.reset() }
+
+  func testOfflineMessageStaysQueuedWithoutWaitingForAReply() async {
+    StubProtocol.handler = { _ in (503, Data()) }
+    let store = makeStore(label: "offline-message")
+    let started = Date()
+    await store.send("I need a nap")
+    XCTAssertEqual(store.pendingCount, 1)
+    XCTAssertFalse(store.awaitingReply)
+    XCTAssertLessThan(Date().timeIntervalSince(started), 5)
+  }
 
   /// Asserts the screen changes *before* the round trip. The previous version
   /// of this test passed with the entire optimistic-write feature deleted.
@@ -402,6 +450,14 @@ final class PlannerTests: XCTestCase {
 
   private func payload() -> ArgonPlannerPayload {
     try! JSONDecoder().decode(ArgonPlannerPayload.self, from: Data(plannerJSON.utf8))
+  }
+
+  func testAdjustingPlanKeepsFocusNotShownAmongChoices() {
+    let plan = ArgonPlanSubmission.from(payload: payload(), longTermPicked: [],
+      answers: ["cw": .done], accepted: [], extras: [], startAt: "20:00",
+      existingFocus: ["today-task", "essay", "cw"])
+    XCTAssertEqual(plan.focus, ["today-task"])
+    XCTAssertEqual(plan.done, ["cw"])
   }
 
   func testChemIsNeverPreTickedWhateverTheServerSays() {

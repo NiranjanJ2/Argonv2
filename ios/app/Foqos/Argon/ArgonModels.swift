@@ -242,6 +242,7 @@ struct ArgonPlannerStatus: Codable, Equatable {
 struct ArgonRelease: Codable, Equatable {
   var until: String
   var version: Int
+  var scope: String?
 
   var untilDate: Date? { ArgonDate.parse(until) }
 }

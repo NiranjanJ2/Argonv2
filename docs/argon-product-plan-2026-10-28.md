@@ -18,6 +18,10 @@ Argon keeps the task list trustworthy and helps Niranjan begin a realistic next 
 
 ## Build order
 
+The first implementation now adds the Today card, low-energy adjustment, a
+one-hour nap, a night-off action, and a 20-minute focus session with extension.
+Screen Time enforcement still needs confirmation on the physical phone.
+
 | Order | Change | Ship when |
 | --- | --- | --- |
 | 1 | Switch to GPT-6.1 Terra at medium reasoning; shorten the brief; allow one contextual question; give the model a `plan_tonight` tool. | Model access, budget accounting, agent and runtime self-checks pass; live config and service verified. |

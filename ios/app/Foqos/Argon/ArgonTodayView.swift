@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftData
 
 /// What he opens the app to see: what's due, what he's on, and whether any of
 /// it can be trusted right now.
@@ -8,10 +9,16 @@ import SwiftUI
 /// nothing — and grouping does the job the glass cards were straining at.
 struct ArgonTodayView: View {
   let store: ArgonStore
+  var adjustPlan: () -> Void = {}
+  @Environment(\.modelContext) private var context
   @State private var newTask = ""
   @State private var adding = false
   @State private var showOverdue = false
   @State private var showFuture = false
+  @State private var replanning = false
+  @State private var extending = false
+  @State private var adjustmentResult: String?
+  @AppStorage("argon.rest.until") private var restTimestamp = 0.0
   @FocusState private var addFocused: Bool
 
   var body: some View {
@@ -27,6 +34,7 @@ struct ArgonTodayView: View {
       }
       briefRows
       runningRows
+      nextStepRows
       boardRows
       overdueRows
       futureRows
@@ -68,6 +76,134 @@ struct ArgonTodayView: View {
 
   // MARK: sections — a label row, then rows that together draw one box
 
+  @ViewBuilder private var nextStepRows: some View {
+    if restTimestamp > Date().timeIntervalSince1970 {
+      let until = Date(timeIntervalSince1970: restTimestamp)
+      label("Taking a break")
+      HStack {
+        Text(store.pendingCount > 0
+             ? "Pause waiting to sync."
+             : "Argon is paused until \(until.formatted(date: .omitted, time: .shortened)).")
+          .foregroundStyle(Argon.Tone.primary)
+        Spacer()
+        Button("Resume") { resume() }.foregroundStyle(Argon.accent)
+      }
+      .font(Argon.detail).buttonStyle(.plain)
+      .padding(.vertical, 12).draftRow(.single, stroke: Argon.lineStrong)
+    } else if store.state.started == nil, let task = nextTask {
+      label("Next")
+      VStack(alignment: .leading, spacing: 12) {
+        Text(task.title).font(Argon.body.weight(.medium))
+          .foregroundStyle(Argon.Tone.primary)
+        if let start = plannedStart {
+          Text("Planned for \(start)")
+            .font(Argon.label).foregroundStyle(Argon.Tone.secondary)
+        }
+        HStack(spacing: 10) {
+          Button { Task { await store.start(task) } } label: {
+            Label("Start 20 min", systemImage: "play.fill")
+              .frame(maxWidth: .infinity, minHeight: 44)
+          }
+          .foregroundStyle(Argon.Ink.base)
+          .background(Argon.Tone.primary)
+          adjustmentMenu
+        }
+        .font(Argon.detail.weight(.medium)).buttonStyle(.plain)
+        if replanning {
+          Text("Argon is adjusting tonight…")
+            .font(Argon.label).foregroundStyle(Argon.Tone.secondary)
+        } else if let adjustmentResult {
+          Text(adjustmentResult)
+            .font(Argon.detail).foregroundStyle(Argon.Tone.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        } else if store.pendingCount > 0 {
+          Text("Changes waiting for connection")
+            .font(Argon.label).foregroundStyle(Argon.Tone.secondary)
+        }
+      }
+      .padding(.vertical, 12)
+      .draftRow(.single, stroke: Argon.lineStrong)
+    } else if store.state.started == nil {
+      HStack {
+        Button("Make a plan", action: adjustPlan).foregroundStyle(Argon.accent)
+        Spacer()
+        adjustmentMenu
+      }
+      .font(Argon.body).buttonStyle(.plain)
+      .padding(.vertical, 12).draftRow(.single, stroke: Argon.lineStrong)
+    }
+  }
+
+  private var nextTask: ArgonTask? {
+    let available = store.state.tonight.filter { !$0.isLocal && !$0.isStarted }
+    for id in store.state.planner?.focus ?? [] {
+      if let task = available.first(where: { $0.id == id }) { return task }
+    }
+    return available.first
+  }
+
+  private var adjustmentMenu: some View {
+    Menu {
+      Button("Low energy") {
+        replan("I'm low on energy. Adjust tonight's focus and start time to a manageable plan, using my tasks and calendar. Don't ask me to fill in a form.")
+      }
+      Button("Nap for an hour") { nap() }
+      Button("Not tonight") { restTonight() }
+      Button("Full plan", action: adjustPlan)
+    } label: {
+      Text("Adjust").frame(minWidth: 82, minHeight: 44)
+        .overlay(Rectangle().strokeBorder(Argon.lineStrong, lineWidth: 1))
+    }
+    .foregroundStyle(Argon.Tone.secondary)
+    .disabled(replanning)
+  }
+
+  private func restTonight() {
+    guard let until = Calendar.current.nextDate(after: Date(), matching: DateComponents(hour: 7),
+                                                 matchingPolicy: .nextTime) else { return }
+    ArgonLockReconciler.restLocally(until: until, context: context)
+    restTimestamp = until.timeIntervalSince1970
+    Task { await store.rest(until: until) }
+  }
+
+  private func nap() {
+    let seconds = ceil((Date().timeIntervalSince1970 + 3600) / 60) * 60
+    let until = Date(timeIntervalSince1970: seconds)
+    ArgonLockReconciler.restLocally(until: until, context: context)
+    restTimestamp = seconds
+    Task { await store.rest(until: until, planAfter: true) }
+  }
+
+  private func resume() {
+    let until = Date(timeIntervalSince1970: restTimestamp)
+    ArgonOverride.clear()
+    restTimestamp = 0
+    Task { await store.resume(until: until) }
+  }
+
+  private var plannedStart: String? {
+    guard let routine = store.state.routine, routine.chosen,
+          let minutes = routine.startMinutes,
+          let date = Calendar.current.date(bySettingHour: minutes / 60,
+                                           minute: minutes % 60, second: 0, of: Date())
+    else { return nil }
+    return date.formatted(date: .omitted, time: .shortened)
+  }
+
+  private func replan(_ message: String) {
+    guard !replanning else { return }
+    replanning = true
+    adjustmentResult = nil
+    let previous = store.messages.filter { $0.isFromArgon }.map(\.seq).max() ?? 0
+    Task {
+      await store.send(message)
+      await store.refresh()
+      adjustmentResult = store.messages.last(where: { $0.isFromArgon && $0.seq > previous })?.text
+        ?? (store.pendingCount > 0 ? "Waiting for connection." : "Argon hasn't replied yet.")
+      replanning = false
+    }
+  }
+
   @ViewBuilder private var briefRows: some View {
     if let brief = store.state.brief, !brief.acked,
        !brief.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -91,25 +227,29 @@ struct ArgonTodayView: View {
   @ViewBuilder private var runningRows: some View {
     if let started = store.state.started {
       label("Working on")
-      HStack(spacing: 12) {
-        ArgonPulse()
-        VStack(alignment: .leading, spacing: 2) {
+      VStack(alignment: .leading, spacing: 12) {
+        HStack(alignment: .top, spacing: 12) {
+          ArgonPulse().padding(.top, 6)
+          VStack(alignment: .leading, spacing: 2) {
           Text(started.title)
             .font(Argon.body.weight(.medium))
             .foregroundStyle(Argon.Tone.primary)
-            // Unbounded, a real Codecademy title took five lines. Rows cap at two.
             .lineLimit(2)
           Text(runningDetail(started))
             .font(Argon.label).foregroundStyle(Argon.Tone.secondary)
+          }
         }
-        Spacer(minLength: 8)
-        // Stop and Done are different claims — "not on this now" and "this is
-        // finished" — and only he can make either.
-        Button("Stop") { Task { await store.stop(started) } }
-          .foregroundStyle(Argon.Tone.secondary)
-        Button("Done") { Task { await store.complete(started) } }
-          .fontWeight(.semibold)
-          .foregroundStyle(Argon.accent)
+        HStack(spacing: 18) {
+          Button(extending ? "Extending…" : "20 more min") {
+            extending = true
+            Task { await store.extend(started); extending = false }
+          }.disabled(extending).foregroundStyle(Argon.accent)
+          Button("Stop") { Task { await store.stop(started) } }
+            .foregroundStyle(Argon.Tone.secondary)
+          Button("Done") { Task { await store.complete(started) } }
+            .fontWeight(.semibold).foregroundStyle(Argon.accent)
+        }
+        .frame(minHeight: 44)
       }
       .font(Argon.detail)
       .buttonStyle(.plain)
@@ -121,7 +261,10 @@ struct ArgonTodayView: View {
   private func runningDetail(_ task: ArgonTask) -> String {
     let since = task.startedAt.flatMap(ArgonDate.parse)
       .map { "Since \($0.formatted(date: .omitted, time: .shortened))" } ?? "Running"
-    return store.state.lock?.isLive == true ? "\(since), apps blocked" : since
+    if let lock = store.state.lock, lock.isLive, let end = lock.endsAt {
+      return "\(since), apps blocked until \(end.formatted(date: .omitted, time: .shortened))"
+    }
+    return since
   }
 
   @ViewBuilder private var boardRows: some View {
@@ -293,12 +436,6 @@ struct ArgonTaskRow: View {
     }
     .padding(.vertical, 12)
     .contentShape(Rectangle())
-    // v1: tap the row to start it. Starting also raises the shield, and Stop
-    // on the card above takes it down again.
-    .onTapGesture {
-      guard !task.isStarted, !task.isLocal else { return }
-      Task { await store.start(task) }
-    }
     // His muscle memory from v1: swipe left completes, swipe right defers.
     .swipeActions(edge: .trailing, allowsFullSwipe: true) {
       if !task.isLocal {
@@ -321,7 +458,7 @@ struct ArgonTaskRow: View {
     }
     .contextMenu {
       if !task.isStarted && !task.isLocal {
-        Button("Start", systemImage: "play.fill") { Task { await store.start(task) } }
+        Button("Start 20 min", systemImage: "play.fill") { Task { await store.start(task) } }
       }
       if movable {
         Button("Due tomorrow", systemImage: "calendar.badge.clock") {

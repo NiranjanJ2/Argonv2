@@ -18,6 +18,7 @@ struct ArgonRootView: View {
   /// The afternoon sheet, when there is one to show.
   @State private var plannerSheet: ArgonPlannerPayload?
   @State private var fetchingPlanner = false
+  @State private var plannerError = false
 
   enum Tab: Hashable {
     case today, chat, focus, settings
@@ -34,7 +35,7 @@ struct ArgonRootView: View {
 
   var body: some View {
     TabView(selection: $tab) {
-      ArgonTodayView(store: store)
+      ArgonTodayView(store: store) { Task { await openPlanner() } }
         .tabItem { Label("Today", systemImage: "list.bullet") }
         .tag(Tab.today)
 
@@ -63,16 +64,14 @@ struct ArgonRootView: View {
     .sheet(isPresented: needsSetup) {
       ArgonSetupView().interactiveDismissDisabled()
     }
-    // The afternoon sheet opens itself: first time the app is up after 15:36
-    // on a day not yet planned, when there is something to decide. Hung off
-    // fresh state rather than launch so a push or a pull after 15:36 offers it
-    // too. Swiping it away is allowed and it comes back next time — v1's
-    // behaviour; only submitting closes it for the day.
+    // Open the full planner only when requested from Today.
     .sheet(item: $plannerSheet) { payload in
       ArgonPlannerView(store: store, payload: payload)
     }
-    .onReceive(NotificationCenter.default.publisher(for: .argonStateApplied)) { _ in
-      Task { await offerPlannerIfDue() }
+    .alert("Couldn't open the plan", isPresented: $plannerError) {
+      Button("OK", role: .cancel) { }
+    } message: {
+      Text("Check your connection and try again.")
     }
     // The tab bar sits on glass too, so the ambient field runs behind it
     // rather than stopping at a grey strip.
@@ -99,16 +98,12 @@ struct ArgonRootView: View {
     }
   }
 
-  /// Only in the foreground, after setup, and one fetch at a time: a silent
-  /// push landing while the app is backgrounded must not queue a sheet, and
-  /// two refreshes landing together must not read Classroom twice.
-  private func offerPlannerIfDue() async {
-    guard setupComplete, phase == .active, plannerSheet == nil, !fetchingPlanner
-    else { return }
+  /// Load the full planner on request, once at a time.
+  private func openPlanner() async {
+    guard plannerSheet == nil, !fetchingPlanner else { return }
     fetchingPlanner = true
     defer { fetchingPlanner = false }
-    if let payload = await store.plannerIfDue() {
-      plannerSheet = payload
-    }
+    do { plannerSheet = try await store.loadPlanner() }
+    catch { plannerError = true }
   }
 }

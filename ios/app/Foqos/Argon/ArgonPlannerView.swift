@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftData
 
 /// The afternoon planning sheet, as four questions rather than one form.
 ///
@@ -17,6 +18,7 @@ struct ArgonPlannerView: View {
   let store: ArgonStore
   let payload: ArgonPlannerPayload
   @Environment(\.dismiss) private var dismiss
+  @Environment(\.modelContext) private var context
 
   @State private var step = 0
   @State private var longTermPicked: Set<String> = []
@@ -30,6 +32,7 @@ struct ArgonPlannerView: View {
   init(store: ArgonStore, payload: ArgonPlannerPayload) {
     self.store = store
     self.payload = payload
+    _longTermPicked = State(initialValue: Set(store.state.planner?.focus ?? []))
     // Lang lines arrive pre-ticked (the teacher said so); Chem never does.
     _accepted = State(initialValue: Set(payload.suggestions.filter(\.isDefault).map(\.id)))
     let hhmm = ArgonRoutine.minutes(payload.startAt ?? payload.defaultStart) ?? 18 * 60
@@ -377,11 +380,19 @@ struct ArgonPlannerView: View {
     formatter.dateFormat = "HH:mm"
     let plan = ArgonPlanSubmission.from(
       payload: payload, longTermPicked: longTermPicked, answers: answers,
-      accepted: accepted, extras: extras, startAt: formatter.string(from: startAt))
+      accepted: accepted, extras: extras, startAt: formatter.string(from: startAt),
+      existingFocus: store.state.planner?.focus ?? [])
     Task {
       // Durable: the outbox holds it through a dead network, and the store
       // records the submission locally so the sheet does not reopen meanwhile.
       await store.submitPlan(plan)
+      let until = Calendar.current.date(bySetting: .second, value: 0, of: startAt) ?? startAt
+      if until > Date(), ArgonRoutineSettings.isHoldingSession(
+        recorded: ArgonRoutineSettings.holdingSessionID,
+        active: SharedData.getActiveSharedSession()?.id) {
+        ArgonLockReconciler.restLocally(until: until, context: context)
+        await store.rest(until: until)
+      }
       isSaving = false
       dismiss()
     }

@@ -334,6 +334,7 @@ def routine(store, now: datetime | None = None) -> dict[str, Any]:
     chose and lets the phone keep it.
     """
     chosen = start_time(store, now)
+    quiet = store.quiet()
     return {
         "start_at": chosen or DEFAULT_START_HHMM,
         "chosen": chosen is not None,
@@ -341,7 +342,7 @@ def routine(store, now: datetime | None = None) -> dict[str, Any]:
         "planned_today": last_planned(store) == clock.day_key(now),
         "school_nights": list(SCHOOL_NIGHTS),
         "window_minutes": BLOCK_WINDOW_MIN,
-        "warning_minutes": WARNING_MINUTES,
+        "warning_minutes": 0 if quiet and quiet[1] == "he chose a break" else WARNING_MINUTES,
     }
 
 

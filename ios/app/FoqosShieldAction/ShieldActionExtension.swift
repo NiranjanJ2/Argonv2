@@ -45,6 +45,12 @@ class ShieldActionExtension: ShieldActionDelegate {
     resource: SoftUnblockResource,
     completionHandler: @escaping (ShieldActionResponse) -> Void
   ) {
+    let holding = UserDefaults(suiteName: "group.com.niranjanj.argon")?
+      .string(forKey: "argon.routine.holdingSessionID")
+    if let holding, SharedData.getActiveSharedSession()?.id == holding {
+      completionHandler(.close)
+      return
+    }
     guard action == .primaryButtonPressed,
       let session = SoftUnblockGrantStore.activeSession,
       let snapshot = SharedData.snapshot(for: session.profileId.uuidString)

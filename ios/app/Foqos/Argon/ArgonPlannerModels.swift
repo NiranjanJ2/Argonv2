@@ -179,10 +179,14 @@ struct ArgonPlanSubmission: Codable, Equatable {
     answers: [String: ArgonOverdueAnswer],
     accepted: Set<String>,
     extras: [String],
-    startAt: String?
+    startAt: String?,
+    existingFocus: [String] = []
   ) -> ArgonPlanSubmission {
     var plan = ArgonPlanSubmission(startAt: startAt)
     plan.focus = payload.longTerm.map(\.id).filter(longTermPicked.contains)
+    let reviewed = Set(payload.longTerm.map(\.id) + payload.overdue.map(\.id))
+    let picked = Set(plan.focus)
+    plan.focus += existingFocus.filter { !reviewed.contains($0) && !picked.contains($0) }
     for item in payload.overdue {
       switch answers[item.id] {
       case .done: plan.done.append(item.id)

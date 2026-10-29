@@ -49,10 +49,12 @@ enum ArgonLockReconciler {
     // happen on time even if this app never runs again between now and then.
     // Reconciling the Foqos session below is what makes the *current* state
     // right; the schedule is what makes the boundaries right.
+    var windowArmed = false
     if let lock, lock.secondsLeft > 0,
        let start = lock.startsAt, let end = lock.endsAt {
       let arm = ArgonLockWindow.arm(from: start, until: end,
                                     selection: lockSelection(in: context))
+      windowArmed = arm == .armed
       // Report the arming, not just the blocking. A lock booked for 20:30 is
       // *handled* the moment the window is armed; without saying so the server
       // reads "published, never confirmed" for an hour and Argon cannot tell
@@ -80,6 +82,10 @@ enum ArgonLockReconciler {
     let active = StrategyManager.shared.activeSession
 
     if wanted, active == nil {
+      if let lock, !canStartTimedSession(secondsLeft: lock.secondsLeft) {
+        applyShortWindow(lock, armed: windowArmed)
+        return
+      }
       guard let profile = profile(in: context) else {
         // Nothing to block with. Said out loud rather than swallowed: the
         // commonest cause is setup never finished, and he can only fix what he
@@ -90,7 +96,41 @@ enum ArgonLockReconciler {
       StrategyManager.shared.startSessionFromBackground(
         profile.id, context: context,
         durationInMinutes: max(1, (lock?.secondsLeft ?? 0) / 60))
+      guard SharedData.getActiveSharedSession() != nil else {
+        if windowArmed { ArgonLockWindow.raiseShield() }
+        report(lock, shielded: windowArmed, error: "task session could not start")
+        return
+      }
       UserDefaults.standard.set(profile.id.uuidString, forKey: ownedKey)
+      UserDefaults.standard.set(SharedData.getActiveSharedSession()?.id, forKey: ownedSessionKey)
+      report(lock, shielded: true, error: nil)
+      return
+    }
+
+    if wanted, let active,
+       let holding = ArgonRoutineSettings.holdingSessionID,
+       ArgonRoutineSettings.isHoldingSession(
+        recorded: holding, active: SharedData.getActiveSharedSession()?.id) {
+      // Replace only the session the evening routine created, never a manual one.
+      _ = StrategyManager.shared.releaseForArgon(context: context)
+      guard SharedData.getActiveSharedSession()?.id != holding else {
+        report(lock, shielded: true, error: "couldn't replace the evening block")
+        return
+      }
+      if let lock, !canStartTimedSession(secondsLeft: lock.secondsLeft) {
+        applyShortWindow(lock, armed: windowArmed)
+        return
+      }
+      StrategyManager.shared.startSessionFromBackground(
+        active.blockedProfile.id, context: context,
+        durationInMinutes: max(15, (lock?.secondsLeft ?? 0) / 60))
+      guard SharedData.getActiveSharedSession() != nil else {
+        if windowArmed { ArgonLockWindow.raiseShield() }
+        report(lock, shielded: windowArmed, error: "task session could not start")
+        return
+      }
+      UserDefaults.standard.set(active.blockedProfile.id.uuidString, forKey: ownedKey)
+      UserDefaults.standard.set(SharedData.getActiveSharedSession()?.id, forKey: ownedSessionKey)
       report(lock, shielded: true, error: nil)
       return
     }
@@ -108,6 +148,7 @@ enum ArgonLockReconciler {
       StrategyManager.shared.stopSessionFromBackground(
         active.blockedProfile.id, context: context)
       UserDefaults.standard.removeObject(forKey: ownedKey)
+      UserDefaults.standard.removeObject(forKey: ownedSessionKey)
     }
   }
 
@@ -129,6 +170,43 @@ enum ArgonLockReconciler {
 
   private static let lastReportKey = "argon.lock.lastReport"
 
+  nonisolated static func canStartTimedSession(secondsLeft: Int) -> Bool {
+    secondsLeft >= 15 * 60
+  }
+
+  private static func applyShortWindow(_ lock: ArgonLock, armed: Bool) {
+    if armed {
+      ArgonLockWindow.raiseShield()
+      report(lock, shielded: true, error: nil)
+    } else {
+      report(lock, shielded: false, error: "not enough time to schedule the remaining lock")
+    }
+  }
+
+  /// A break chosen on the phone works even without a network connection.
+  static func restLocally(until: Date, context: ModelContext) {
+    ArgonOverride.engage(until: until, fromServer: false)
+    ArgonRoutineScheduler.suppressWarnings()
+    ArgonLockWindow.disarm()
+    _ = releaseOwnedSession(context: context)
+  }
+
+  @discardableResult
+  private static func releaseOwnedSession(context: ModelContext) -> Bool {
+    StrategyManager.shared.loadActiveSession(context: context)
+    guard StrategyManager.shared.activeSession != nil,
+          let activeID = SharedData.getActiveSharedSession()?.id else { return false }
+    let holding = ArgonRoutineSettings.isHoldingSession(
+      recorded: ArgonRoutineSettings.holdingSessionID,
+      active: activeID)
+    let owned = UserDefaults.standard.string(forKey: ownedSessionKey) == activeID
+    guard holding || owned else { return false }
+    let stopped = StrategyManager.shared.releaseForArgon(context: context)
+    UserDefaults.standard.removeObject(forKey: ownedKey)
+    UserDefaults.standard.removeObject(forKey: ownedSessionKey)
+    return stopped
+  }
+
   // MARK: release — "let me out", of everything
 
   /// Apply the server's release, once per version, or withdraw one it took back.
@@ -144,8 +222,11 @@ enum ArgonLockReconciler {
       UserDefaults.standard.set(release.version, forKey: appliedKey)
       ArgonOverride.engage(until: until, fromServer: true)
       ArgonLockWindow.disarm()
-      let stopped = StrategyManager.shared.releaseForArgon(context: context)
+      let stopped = release.scope == "argon"
+        ? releaseOwnedSession(context: context)
+        : StrategyManager.shared.releaseForArgon(context: context)
       UserDefaults.standard.removeObject(forKey: ownedKey)
+      UserDefaults.standard.removeObject(forKey: ownedSessionKey)
       ArgonLog.note("lock", "release v\(release.version) applied"
                     + (stopped ? ", stopped the running session" : ", nothing was running"))
     } else if ArgonOverride.isFromServer, ArgonOverride.isActive {
@@ -204,10 +285,12 @@ enum ArgonLockReconciler {
     StrategyManager.shared.stopSessionFromBackground(
       active.blockedProfile.id, context: context)
     UserDefaults.standard.removeObject(forKey: ownedKey)
+    UserDefaults.standard.removeObject(forKey: ownedSessionKey)
   }
 
   /// Marks the session as one Argon started, so releasing it later is allowed.
   private static let ownedKey = "argon.lockOwnedProfileID"
+  private static let ownedSessionKey = "argon.lockOwnedSessionID"
 
   /// What a lock shields: everything the lockdown profile blocks.
   ///

@@ -36,6 +36,12 @@ class ArgonRoutineActivity: TimerActivity {
 
   func start(for profile: SharedData.ProfileSnapshot) {
     let profileId = profile.id.uuidString
+    // Preserve an existing holding session across a schedule re-arm.
+    if !ArgonRoutineSettings.isHoldingSession(
+      recorded: ArgonRoutineSettings.holdingSessionID,
+      active: SharedData.getActiveSharedSession()?.id) {
+      ArgonRoutineSettings.holdingSessionID = ""
+    }
 
     guard ArgonRoutineSettings.isSchoolNightToday() else {
       log.info("Argon routine for \(profileId): not a school night, standing down")
@@ -47,6 +53,11 @@ class ArgonRoutineActivity: TimerActivity {
     // was asleep sick, and nothing but another emergency unblock could undo it.
     if ArgonRoutineSettings.releasedUntil != nil {
       log.info("Argon routine for \(profileId): released, not starting")
+      return
+    }
+
+    if let window = ArgonLockWindow.stored(), window.from <= Date(), window.until > Date() {
+      log.info("Argon routine for \(profileId): a timed lock is already running")
       return
     }
 
@@ -63,6 +74,7 @@ class ArgonRoutineActivity: TimerActivity {
 
     log.info("Argon routine for \(profileId): starting the evening block")
     SharedData.createSessionForSchedular(for: profile.id)
+    ArgonRoutineSettings.holdingSessionID = SharedData.getActiveSharedSession()?.id
     appBlocker.activateRestrictions(for: profile)
   }
 
@@ -77,11 +89,16 @@ class ArgonRoutineActivity: TimerActivity {
       log.info("Argon routine for \(profileId): a different profile owns the session")
       return
     }
+    if !ArgonRoutineSettings.mayEndHoldingSession(
+      recorded: ArgonRoutineSettings.holdingSessionID, active: activeSession.id) {
+      return
+    }
 
     // The interval end is the hard stop. It is applied on-device precisely so a
     // dead server cannot strand him behind a shield.
     appBlocker.deactivateRestrictions()
     SharedData.endActiveSharedSession()
+    ArgonRoutineSettings.holdingSessionID = nil
   }
 }
 
@@ -98,6 +115,24 @@ enum ArgonRoutineSettings {
   private static let defaultSchoolNights = [6, 0, 1, 2, 3]
 
   private static let releasedKey = "argon.release.until"
+  private static let holdingSessionKey = "argon.routine.holdingSessionID"
+
+  static func isHoldingSession(recorded: String?, active: String?) -> Bool {
+    guard let recorded, let active else { return false }
+    return recorded == active
+  }
+
+  static func mayEndHoldingSession(recorded: String?, active: String) -> Bool {
+    recorded == nil || isHoldingSession(recorded: recorded, active: active)
+  }
+
+  static var holdingSessionID: String? {
+    get { suite?.string(forKey: holdingSessionKey) }
+    set {
+      if let newValue { suite?.set(newValue, forKey: holdingSessionKey) }
+      else { suite?.removeObject(forKey: holdingSessionKey) }
+    }
+  }
 
   /// While set and in the future, nothing Argon owns may block the phone —
   /// not a lock, not the evening block. Here, in the app group, because the

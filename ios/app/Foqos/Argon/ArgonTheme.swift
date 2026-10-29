@@ -1,14 +1,6 @@
 import SwiftUI
 
-/// The look: a drawing sheet. Blue-black ground, fine linework, one blue.
-///
-/// This replaced a navy "glass" theme — blooms behind titles, gradient washes
-/// on every card, glows under buttons, a light field that moved with the hour.
-/// Each piece was defensible alone; together they read as generated. His brief
-/// for the replacement (2026-09-22): intentional and minimal, with lines —
-/// "draft lines extending past boxes"; blue as the main colour and a blue tint
-/// for general surfaces, not in the AI-looking way; no bright reds or greens;
-/// red only as a tint over a red.
+/// A blueprint sheet: blue ground, white type, and fine construction lines.
 ///
 /// **The one bold thing is the linework.** Boxes are outlines, not fills, and
 /// their edges run a few points past the corners like construction lines on a
@@ -29,26 +21,26 @@ enum Argon {
   // MARK: ground
 
   enum Ink {
-    static let base = Color(red: 0.039, green: 0.051, blue: 0.071)   // #0A0D12
+    static let base = Color(red: 0.035, green: 0.18, blue: 0.36)
     static let deep = base
     /// A barely-there fill, for the few places a surface must read as pressed.
-    static let slate = Color(red: 0.063, green: 0.078, blue: 0.106)  // #10141B
-    static let raised = Color(red: 0.094, green: 0.114, blue: 0.153) // #181D27
+    static let slate = Color(red: 0.055, green: 0.22, blue: 0.42)
+    static let raised = Color(red: 0.075, green: 0.26, blue: 0.47)
   }
 
   enum Tone {
-    static let primary = Color(red: 0.902, green: 0.922, blue: 0.949)   // #E6EBF2
-    static let secondary = Color(red: 0.553, green: 0.596, blue: 0.667) // #8D98AA
+    static let primary = Color.white
+    static let secondary = Color(red: 0.78, green: 0.86, blue: 0.94)
     /// 4.5:1 on the ground — subject lines, empty states.
-    static let faint = Color(red: 0.463, green: 0.510, blue: 0.584)     // #768295
+    static let faint = Color(red: 0.68, green: 0.79, blue: 0.90)
   }
 
   /// Construction lines: the box edges and the rules between rows.
-  static let line = Color(red: 0.149, green: 0.188, blue: 0.275)        // #263046
+  static let line = Color(red: 0.38, green: 0.57, blue: 0.73)
   /// A box edge he should notice — the brief, the running task.
-  static let lineStrong = Color(red: 0.204, green: 0.259, blue: 0.353)  // #34425A
+  static let lineStrong = Color(red: 0.68, green: 0.81, blue: 0.91)
 
-  static let accent = Color(red: 0.357, green: 0.576, blue: 0.961)      // #5B93F5
+  static let accent = Color(red: 0.72, green: 0.88, blue: 1.0)
   static let accentSoft = accent
   static let accentDeep = accent
 
@@ -81,7 +73,21 @@ enum Argon {
 extension View {
   /// The screen's ground.
   func argonAmbience() -> some View {
-    background(Argon.Ink.base.ignoresSafeArea())
+    background {
+      ZStack {
+        Argon.Ink.base
+        Canvas { context, size in
+          var grid = Path()
+          stride(from: 0.0, through: size.width, by: 24).forEach { x in
+            grid.move(to: CGPoint(x: x, y: 0)); grid.addLine(to: CGPoint(x: x, y: size.height))
+          }
+          stride(from: 0.0, through: size.height, by: 24).forEach { y in
+            grid.move(to: CGPoint(x: 0, y: y)); grid.addLine(to: CGPoint(x: size.width, y: y))
+          }
+          context.stroke(grid, with: .color(.white.opacity(0.055)), lineWidth: 0.5)
+        }.allowsHitTesting(false)
+      }.ignoresSafeArea()
+    }
   }
 }
 

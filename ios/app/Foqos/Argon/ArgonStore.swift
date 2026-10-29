@@ -163,6 +163,10 @@ final class ArgonStore {
     await enqueue(.start(taskID: task.id))
   }
 
+  func extend(_ task: ArgonTask) async {
+    await enqueue(.extend(taskID: task.id))
+  }
+
   /// He put it down. Drops the shield that starting it raised, without
   /// claiming the work is finished.
   func stop(_ task: ArgonTask) async {
@@ -196,6 +200,7 @@ final class ArgonStore {
     messages.append(.local(role: "user", text: trimmed))
     let before = messages.filter { $0.isFromArgon }.count
     await enqueue(.say(text: trimmed))
+    guard pendingCount == 0, failure == nil else { return }
     await awaitReply(past: before)
   }
 
@@ -265,6 +270,10 @@ final class ArgonStore {
     return payload.needed && payload.hasAnythingToDecide ? payload : nil
   }
 
+  func loadPlanner() async throws -> ArgonPlannerPayload {
+    try await client.planner()
+  }
+
   /// Apply the sheet. Sent even when nothing was chosen: "I looked and
   /// nothing needs moving" is an answer, and without it the sheet reopens.
   func submitPlan(_ plan: ArgonPlanSubmission) async {
@@ -280,6 +289,14 @@ final class ArgonStore {
     guard state.unread > 0 else { return }
     state.unread = 0
     await enqueue(.markRead)
+  }
+
+  func rest(until: Date, planAfter: Bool = false) async {
+    await enqueue(.rest(until: ISO8601DateFormatter().string(from: until), planAfter: planAfter))
+  }
+
+  func resume(until: Date) async {
+    await enqueue(.resume(until: ISO8601DateFormatter().string(from: until)))
   }
 
   /// Change local state the way the server will, so the screen responds to the
@@ -309,7 +326,7 @@ final class ArgonStore {
       }
       state.planner?.due = false
       state.planner?.focus = plan.focus
-    case .add, .say, .markRead:
+    case .add, .say, .markRead, .rest, .resume, .extend:
       break   // handled by the caller, which has the richer value
     }
   }

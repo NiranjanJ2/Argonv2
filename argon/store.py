@@ -718,11 +718,11 @@ class Store:
             return None
         return rec if until > clock.now() else None
 
-    def set_release(self, until: datetime) -> int:
+    def set_release(self, until: datetime, *, scope: str = "all") -> int:
         version = int(self.setting("release_seq", 0) or 0) + 1
         self.put_setting("release_seq", version)
-        self.put_setting("release", {"until": until.isoformat(), "version": version})
-        self._t.append("release_sent", summary=f"every block off until {until:%H:%M}")
+        self.put_setting("release", {"until": until.isoformat(), "version": version, "scope": scope})
+        self._t.append("release_sent", summary=f"{scope} blocks off until {until:%H:%M}")
         return version
 
     def clear_release(self, why: str) -> None:

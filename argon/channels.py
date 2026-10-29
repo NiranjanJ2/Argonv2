@@ -120,8 +120,19 @@ class DiscordChannel:
         if text:
             # The reply is pinned to this message's channel, never re-read
             # from mutable state, so a later message can't redirect it.
-            await asyncio.to_thread(self.on_message, text,
-                                    lambda reply: self.send(reply, channel_id=cid))
+            try:
+                result = await asyncio.to_thread(self.on_message, text,
+                                                 lambda reply: self.send(reply, channel_id=cid))
+                failed = (getattr(result, "error", "") and not getattr(result, "spoke", False)
+                          and not str(result.error).startswith("NOT DELIVERED"))
+            except Exception:  # noqa: BLE001 - keep the gateway alive and report failure
+                log.exception("discord message handling failed")
+                failed = True
+            if failed:
+                try:
+                    await asyncio.to_thread(self.send, "I couldn't respond just now. Please try again.", cid)
+                except Exception:  # noqa: BLE001
+                    log.exception("discord failure reply could not be delivered")
 
     #: How long the agent thread waits for Discord to accept a message. Long
     #: enough for a REST round trip, short enough not to stall a turn.
@@ -211,6 +222,10 @@ def _selftest() -> None:
     assert sent == [("pong", 700)] and saved == ["700"] and dm._channel_id == 700, (sent, saved)
     asyncio.run(dm.handle(msg(1, 900, guild=42)))          # allowed guild message
     assert sent[-1] == ("pong", 900), sent
+    dm.on_message = lambda text, reply: NS(error="provider unavailable", spoke=False)
+    asyncio.run(dm.handle(msg(1, 901, guild=42)))
+    assert sent[-1] == ("I couldn't respond just now. Please try again.", 901)
+    dm.on_message = on_message
     assert saved == ["700"] and dm._channel_id == 700, "guild must not become the DM target"
     asyncio.run(dm.handle(msg(2, 701)))                    # unauthorised author
     asyncio.run(dm.handle(msg("bot", 702)))                # self; "bot" not allowed anyway
@@ -218,7 +233,7 @@ def _selftest() -> None:
     own = msg(1, 703)
     own.author = dm._client.user
     asyncio.run(dm.handle(own))                           # genuine self-message
-    assert len(sent) == 2 and saved == ["700"], (sent, saved)
+    assert len(sent) == 3 and saved == ["700"], (sent, saved)
     # Exercise send's real loop hop and explicit destination without Discord.
     loop = asyncio.new_event_loop()
     worker = threading.Thread(target=loop.run_forever)

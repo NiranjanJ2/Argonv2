@@ -15,7 +15,7 @@ here rather than in a TestFlight build.
 from __future__ import annotations
 
 import hmac
-from datetime import timedelta
+from datetime import datetime, timedelta
 import logging
 from functools import wraps
 from typing import Any
@@ -304,6 +304,64 @@ def create_app(rt) -> Flask:
         rt.wake_phone("override")
         rt.transcript.append("override", summary=f"released for {minutes}m")
         return jsonify({"ok": True, "minutes": minutes})
+
+    @app.post("/v2/rest")
+    @require_token
+    def v2_rest():
+        if cached := replay():
+            return cached
+        try:
+            until = datetime.fromisoformat(text_field(body(), "until"))
+            if until.tzinfo is None:
+                raise ValueError("timezone required")
+            until = until.astimezone(clock.TZ)
+        except ValueError:
+            return jsonify({"error": "until must be a timezone-aware timestamp"}), 400
+        now = clock.now()
+        if until <= now:
+            return remember({"ok": True, "expired": True}, 200)
+        if until > now + timedelta(hours=24):
+            return jsonify({"error": "until must be within 24 hours"}), 400
+        rt.store.clear_lock("he chose a break")
+        rt.store.set_release(until, scope="argon")
+        rt.store.set_quiet(until, "he chose a break")
+        if body().get("plan_after") is True and until.date() == now.date():
+            from argon import planner
+            planner.set_start_time(rt.store, until.strftime("%H:%M"), now)
+            planner.mark_planned(rt.store, clock.day_key(now))
+            rt.transcript.append("planned", summary=f"start moved to {until:%H:%M} after a break")
+        rt.wake_phone("break")
+        return remember({"ok": True, "until": until.isoformat()}, 200)
+
+    @app.post("/v2/tasks/<task_id>/extend")
+    @require_token
+    def v2_extend_task(task_id):
+        if cached := replay():
+            return cached
+        task = rt.extend_task(task_id)
+        if task is None:
+            return jsonify({"error": "task is not running"}), 409
+        return remember({"task": task_json(task)}, 200)
+
+    @app.post("/v2/resume")
+    @require_token
+    def v2_resume():
+        if cached := replay():
+            return cached
+        try:
+            target = datetime.fromisoformat(text_field(body(), "until"))
+            if target.tzinfo is None:
+                raise ValueError("timezone required")
+        except ValueError:
+            return jsonify({"error": "until must be a timezone-aware timestamp"}), 400
+        quiet = rt.store.quiet()
+        if quiet and quiet[0] == target and quiet[1] == "he chose a break":
+            rt.store.clear_quiet()
+        release = rt.store.release()
+        if release and datetime.fromisoformat(release["until"]) == target:
+            rt.store.clear_release("he chose to resume")
+        rt.wake_phone("resume")
+        return remember({"ok": True}, 200)
 
     @app.route("/v1/ios/diagnostics", methods=["GET", "POST", "DELETE"])
     @require_token
@@ -628,6 +686,7 @@ def _selftest() -> None:
     import os
     import tempfile
     from datetime import datetime
+    from argon import planner
 
     from argon import config, provider
     from argon.runtime import Runtime
@@ -800,6 +859,43 @@ def _selftest() -> None:
         state = c.get("/v2/state", headers=auth).get_json()
         assert state["planner"]["due"] is False, "submitting closes it for the day"
         assert state["routine"]["start_at"] == "19:15" and state["routine"]["chosen"]
+
+        # A queued break must not take effect after it has expired.
+        assert c.post("/v2/rest", json={"until": "2026-09-14T17:00:00-07:00"},
+                      headers=auth).get_json()["expired"] is True
+        assert c.post("/v2/rest", json={"until": "2026-09-14T19:00:00"},
+                      headers=auth).status_code == 400
+        rest_headers = {**auth, "Idempotency-Key": "rest-once"}
+        for _ in range(2):
+            assert c.post("/v2/rest", json={"until": "2026-09-14T19:00:00-07:00"},
+                          headers=rest_headers).status_code == 200
+        assert rt.store.quiet() is not None and rt.store.release() is not None
+        assert rt.store.release()["scope"] == "argon"
+        assert c.get("/v2/state", headers=auth).get_json()["routine"]["warning_minutes"] == 0
+        assert c.post("/v2/resume", json={"until": "2026-09-14T18:30:00-07:00"},
+                      headers=auth).status_code == 200
+        assert rt.store.quiet() is not None, "a stale resume must not cancel a later break"
+        assert c.post("/v2/resume", json={"until": "2026-09-14T19:00:00-07:00"},
+                      headers=auth).status_code == 200
+        assert rt.store.quiet() is None and rt.store.release() is None
+        assert c.get("/v2/state", headers=auth).get_json()["routine"]["warning_minutes"] > 0
+        assert c.post("/v2/rest", json={"until": "2026-09-15T01:00:00-07:00",
+                                        "plan_after": True}, headers=auth).status_code == 200
+        assert planner.start_time(rt.store) == "19:15", "tomorrow must not overwrite today's plan"
+        c.post("/v2/resume", json={"until": "2026-09-15T01:00:00-07:00"}, headers=auth)
+        assert c.post("/v2/rest", json={"until": "2026-09-14T19:30:00-07:00",
+                                        "plan_after": True}, headers=auth).status_code == 200
+        assert planner.start_time(rt.store) == "19:30"
+        c.post("/v2/resume", json={"until": "2026-09-14T19:30:00-07:00"}, headers=auth)
+
+        focus_task = rt.store.add_task("Focus test")
+        assert c.post(f"/v2/tasks/{focus_task.id}/extend", json={}, headers=auth).status_code == 409
+        rt.begin_task(focus_task.id)
+        extend_headers = {**auth, "Idempotency-Key": "extend-once"}
+        assert c.post(f"/v2/tasks/{focus_task.id}/extend", json={}, headers=extend_headers).status_code == 200
+        version = rt.store.lock_record()["version"]
+        assert c.post(f"/v2/tasks/{focus_task.id}/extend", json={}, headers=extend_headers).status_code == 200
+        assert rt.store.lock_record()["version"] == version, "retry must not extend twice"
 
         # Unauthenticated routing errors must not reach the transcript: the
         # handler runs before auth, and the transcript is the model's context.

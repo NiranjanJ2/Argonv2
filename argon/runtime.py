@@ -46,14 +46,8 @@ AGENDA_TTL_MINUTES = 10
 #: not a warning — and short enough that it is not just the day's agenda.
 EVENT_URGENT_MINUTES = 30
 
-#: How long a lock raised by starting a task may last. He presses done long
-#: before this; the cap is only so a task started and forgotten cannot shut his
-#: phone overnight.
-TASK_LOCK_HOURS = 4
-
-#: Renew a task's block when it is this close to lapsing, so a long session
-#: never has the shield drop out from under it mid-work.
-RENEW_WITHIN_MINUTES = 30
+#: A task starts with a short, bounded focus interval.
+TASK_LOCK_MINUTES = 20
 
 
 def system_prompt() -> str:
@@ -427,7 +421,7 @@ class Runtime:
         held = self.store.lock_record()
         if not (held and held.get("source") == "him"
                 and held["from_at"] <= clock.now() < held["until_at"]):
-            until = clock.now() + timedelta(hours=TASK_LOCK_HOURS)
+            until = clock.now() + timedelta(minutes=TASK_LOCK_MINUTES)
             self.store.set_lock(until, f"working on {task.title}"[:120],
                                 source="task", task_id=task.id)
         # Starting work is him asking for the shield back.
@@ -452,6 +446,18 @@ class Runtime:
         if rec and rec.get("source") == "task" and rec.get("task_id") == task.id:
             self.store.clear_lock("the task it was raised for ended")
         self.wake_phone("task ended")
+        return task
+
+    def extend_task(self, tid: str) -> object | None:
+        task = self.store.task(tid)
+        if task is None or task.done or not task.started:
+            return None
+        held = self.store.lock_record()
+        if held and held.get("source") == "him" and held["from_at"] <= clock.now() < held["until_at"]:
+            return task
+        self.store.set_lock(clock.now() + timedelta(minutes=TASK_LOCK_MINUTES),
+                            f"working on {task.title}"[:120], source="task", task_id=tid)
+        self.wake_phone("task extended")
         return task
 
     def wake_phone(self, why: str) -> bool:
@@ -1105,7 +1111,6 @@ class Runtime:
                 return None
         if self._announce_budget_stop():
             return None
-        self.renew_task_lock()
         self.escalate_lock_if_idle()
         self.transcript.append("tick")
         brief = self.brief_due()
@@ -1211,28 +1216,6 @@ class Runtime:
             return
         self._lock_was_live = live
         self.wake_phone("lock started" if live else "lock ended")
-
-    def renew_task_lock(self) -> None:
-        """Keep a running task's block alive while he is still on it.
-
-        v1 renewed on every status read, for the reason the fixed window gets
-        wrong: a session that runs past the window drops the shield underneath
-        him mid-work, and he did not stop, so nothing told it to. Renewed only
-        while the task that raised it is still started — the moment he stops or
-        finishes, end_task clears it instead.
-        """
-        rec = self.store.lock_record()
-        if rec is None or rec.get("source") != "task":
-            return
-        task = self.store.task(rec.get("task_id") or "")
-        if task is None or task.done or not task.started:
-            return
-        if (rec["until_at"] - clock.now()).total_seconds() > RENEW_WITHIN_MINUTES * 60:
-            return
-        self.store.set_lock(clock.now() + timedelta(hours=TASK_LOCK_HOURS),
-                            rec.get("reason", "working"),
-                            source="task", task_id=task.id)
-        self.wake_phone("lock renewed")
 
     def escalate_lock_if_idle(self) -> None:
         """Extend a lapsed "until you start" lock when nothing has begun.
@@ -1621,6 +1604,8 @@ def _selftest() -> None:
         b = owner.store.add_task("Reading")
         owner.begin_task(a.id)
         assert owner.store.lock() is not None
+        remaining = (owner.store.lock_record()["until_at"] - clock.now()).total_seconds()
+        assert 19 * 60 < remaining <= 20 * 60, remaining
         owner.end_task(b.id, done=True)
         assert owner.store.lock() is not None, "another task must not lift it"
         owner.store.update_task(a.id, title="Essay (revised)")

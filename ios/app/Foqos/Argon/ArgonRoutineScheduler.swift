@@ -26,6 +26,12 @@ enum ArgonRoutineScheduler {
   private static let appliedKey = "argon.routine.applied"
   private static let warningPrefix = "argon.routine.warning."
 
+  static func suppressWarnings() {
+    UNUserNotificationCenter.current().removePendingNotificationRequests(
+      withIdentifiers: (0..<7).map { "\(warningPrefix)\($0)" })
+    defaults.removeObject(forKey: appliedKey)
+  }
+
   /// Rewrite the schedule only when it actually changed.
   ///
   /// This runs on every successful refresh. `startMonitoring` on an unchanged

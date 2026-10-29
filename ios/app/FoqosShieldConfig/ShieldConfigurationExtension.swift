@@ -15,6 +15,7 @@ import UIKit
 // Make sure that your class name matches the NSExtensionPrincipalClass in your Info.plist.
 class ShieldConfigurationExtension: ShieldConfigurationDataSource {
   override func configuration(shielding application: Application) -> ShieldConfiguration {
+    if let holding = holdingConfiguration() { return holding }
     if let softUnblockConfiguration = softUnblockConfiguration(for: application, in: nil) {
       return softUnblockConfiguration
     }
@@ -26,6 +27,7 @@ class ShieldConfigurationExtension: ShieldConfigurationDataSource {
   override func configuration(shielding application: Application, in category: ActivityCategory)
     -> ShieldConfiguration
   {
+    if let holding = holdingConfiguration() { return holding }
     if let softUnblockConfiguration = softUnblockConfiguration(for: application, in: category) {
       return softUnblockConfiguration
     }
@@ -35,13 +37,31 @@ class ShieldConfigurationExtension: ShieldConfigurationDataSource {
   }
 
   override func configuration(shielding webDomain: WebDomain) -> ShieldConfiguration {
+    if let holding = holdingConfiguration() { return holding }
     return createCustomShieldConfiguration(for: .website, title: webDomain.domain ?? "Website")
   }
 
   override func configuration(shielding webDomain: WebDomain, in category: ActivityCategory)
     -> ShieldConfiguration
   {
+    if let holding = holdingConfiguration() { return holding }
     return createCustomShieldConfiguration(for: .website, title: webDomain.domain ?? "Website")
+  }
+
+  private func holdingConfiguration() -> ShieldConfiguration? {
+    let holding = UserDefaults(suiteName: "group.com.niranjanj.argon")?
+      .string(forKey: "argon.routine.holdingSessionID")
+    guard let holding, SharedData.getActiveSharedSession()?.id == holding else { return nil }
+    return ShieldConfiguration(
+      backgroundBlurStyle: .dark,
+      backgroundColor: UIColor(red: 0.035, green: 0.18, blue: 0.36, alpha: 1),
+      icon: nil,
+      title: .init(text: "Ready when you are", color: .white),
+      subtitle: .init(text: "Open Argon to start, adjust your plan, or take the night off.",
+                      color: UIColor.white.withAlphaComponent(0.88)),
+      primaryButtonLabel: .init(text: "Close", color: .black),
+      primaryButtonBackgroundColor: .white,
+      secondaryButtonLabel: nil)
   }
 
   private func createCustomShieldConfiguration(for type: BlockedContentType, title: String)

@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-10-28
+
+- Reworked Today as a blueprint sheet with an explicit next action, capacity
+  adjustments, and a break that releases Argon's own block and quiets nudges.
+- Made task focus a 20-minute interval with an explicit extension; stale
+  offline starts expire instead of unexpectedly blocking after reconnection.
+- Kept the evening holding block distinct from manual sessions and made its
+  shield direct the user back to Argon.
+- Added a same-channel Discord error reply when the assistant cannot answer.
+
 ## 2026-10-07
 
 ### Fixed

@@ -19,13 +19,14 @@ actor ArgonClient {
     case offline(String)
     case timedOut
     case unauthorised
+    case expiredFocus
     case rejected(status: Int, detail: String)   // 4xx — asking again won't help
     case server(status: Int, detail: String)     // 5xx — probably will
 
     var isTransient: Bool {
       switch self {
       case .offline, .timedOut, .server: return true
-      case .unauthorised, .rejected: return false
+      case .unauthorised, .rejected, .expiredFocus: return false
       }
     }
 
@@ -34,6 +35,7 @@ actor ArgonClient {
       case .offline: return "Can't reach Argon."
       case .timedOut: return "Argon didn't answer in time."
       case .unauthorised: return "Server rejected the token — check Settings."
+      case .expiredFocus: return "Focus request expired while offline. Start again when you're ready."
       case .rejected(let status, let detail): return "Argon refused that (\(status)). \(detail)"
       case .server(let status, _): return "Argon had an error (\(status))."
       }
@@ -145,10 +147,14 @@ actor ArgonClient {
   // MARK: writes — one per PendingWrite.Kind, all returning or throwing
 
   func apply(_ write: PendingWrite) async throws {
+    if write.focusRequestExpired() { throw Failure.expiredFocus }
     let key = write.id.uuidString
     switch write.kind {
     case .start(let id):
       _ = try await request("v1/tasks/\(id)", method: "PATCH", body: ["started": true])
+    case .extend(let id):
+      _ = try await request("v2/tasks/\(id)/extend", method: "POST", body: [:],
+                            idempotencyKey: key)
     case .stop(let id):
       _ = try await request("v1/tasks/\(id)", method: "PATCH", body: ["started": false])
     case .complete(let id):
@@ -169,6 +175,11 @@ actor ArgonClient {
                             idempotencyKey: key, timeout: 20)
     case .markRead:
       _ = try await request("v1/ios/read", method: "POST", body: [:])
+    case .rest(let until, let planAfter):
+      _ = try await request("v2/rest", method: "POST", body: ["until": until, "plan_after": planAfter],
+                            idempotencyKey: key)
+    case .resume(let until):
+      _ = try await request("v2/resume", method: "POST", body: ["until": until], idempotencyKey: key)
     case .plan(let plan):
       // Keyed, because a retry must not add AP Chem twice.
       _ = try await request("v1/planner", method: "POST", body: plan.body,

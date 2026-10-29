@@ -13,12 +13,15 @@ import Foundation
 struct PendingWrite: Codable, Identifiable, Equatable {
   enum Kind: Codable, Equatable {
     case start(taskID: String)
+    case extend(taskID: String)
     case stop(taskID: String)
     case complete(taskID: String)
     case move(taskID: String, due: String)
     case add(title: String, due: String?)
     case say(text: String)
     case markRead
+    case rest(until: String, planAfter: Bool)
+    case resume(until: String)
     /// The afternoon sheet, all of it in one write. One write rather than a
     /// complete per item so the day is marked planned in the same request
     /// that applies it — half a plan landing is how the sheet reopens with
@@ -31,10 +34,10 @@ struct PendingWrite: Codable, Identifiable, Equatable {
   let created: Date
   var attempts: Int
 
-  init(_ kind: Kind) {
+  init(_ kind: Kind, created: Date = Date()) {
     self.id = UUID()
     self.kind = kind
-    self.created = Date()
+    self.created = created
     self.attempts = 0
   }
 
@@ -42,15 +45,25 @@ struct PendingWrite: Codable, Identifiable, Equatable {
   /// stretch; past that the write is stale enough to be wrong to apply.
   var isExhausted: Bool { attempts >= 10 }
 
+  func focusRequestExpired(now: Date = Date()) -> Bool {
+    switch kind {
+    case .start, .extend: return now.timeIntervalSince(created) > 5 * 60
+    default: return false
+    }
+  }
+
   var describedForHim: String {
     switch kind {
     case .start(let id): return "starting a task (\(id.prefix(6)))"
+    case .extend(let id): return "extending a task (\(id.prefix(6)))"
     case .stop(let id): return "stopping a task (\(id.prefix(6)))"
     case .complete(let id): return "completing a task (\(id.prefix(6)))"
     case .move(let id, let due): return "moving a task (\(id.prefix(6))) to \(due)"
     case .add(let title, _): return "adding “\(title)”"
     case .say(let text): return "sending “\(text.prefix(30))”"
     case .markRead: return "marking messages read"
+    case .rest: return "pausing Argon"
+    case .resume: return "resuming Argon"
     case .plan: return "saving this afternoon's plan"
     }
   }
