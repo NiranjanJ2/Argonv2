@@ -17,6 +17,7 @@ struct PendingWrite: Codable, Identifiable, Equatable {
     case stop(taskID: String)
     case complete(taskID: String)
     case move(taskID: String, due: String)
+    case focus(taskID: String)
     case add(title: String, due: String?)
     case say(text: String)
     case markRead
@@ -48,6 +49,7 @@ struct PendingWrite: Codable, Identifiable, Equatable {
   func focusRequestExpired(now: Date = Date()) -> Bool {
     switch kind {
     case .start, .extend: return now.timeIntervalSince(created) > 5 * 60
+    case .focus: return !Calendar.current.isDate(created, inSameDayAs: now)
     default: return false
     }
   }
@@ -59,6 +61,7 @@ struct PendingWrite: Codable, Identifiable, Equatable {
     case .stop(let id): return "stopping a task (\(id.prefix(6)))"
     case .complete(let id): return "completing a task (\(id.prefix(6)))"
     case .move(let id, let due): return "moving a task (\(id.prefix(6))) to \(due)"
+    case .focus: return "choosing the next task"
     case .add(let title, _): return "adding “\(title)”"
     case .say(let text): return "sending “\(text.prefix(30))”"
     case .markRead: return "marking messages read"

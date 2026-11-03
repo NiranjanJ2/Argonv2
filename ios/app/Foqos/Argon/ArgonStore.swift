@@ -187,6 +187,11 @@ final class ArgonStore {
     await enqueue(.move(taskID: task.id, due: due))
   }
 
+  func chooseNext(_ task: ArgonTask) async {
+    apply(.focus(taskID: task.id))
+    await enqueue(.focus(taskID: task.id))
+  }
+
   func add(title: String, due: String? = nil) async {
     let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return }
@@ -316,6 +321,9 @@ final class ArgonStore {
     case .move(let id, let due):
       guard let i = state.tasks.firstIndex(where: { $0.id == id }) else { return }
       state.tasks[i].due = due
+    case .focus(let id):
+      let existing = state.planner?.focus ?? []
+      state.planner?.focus = Array(([id] + existing.filter { $0 != id }).prefix(100))
     case .plan(let plan):
       for id in plan.done + plan.ignore {
         guard let i = state.tasks.firstIndex(where: { $0.id == id }) else { continue }

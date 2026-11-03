@@ -35,7 +35,7 @@ actor ArgonClient {
       case .offline: return "Can't reach Argon."
       case .timedOut: return "Argon didn't answer in time."
       case .unauthorised: return "Server rejected the token — check Settings."
-      case .expiredFocus: return "Focus request expired while offline. Start again when you're ready."
+      case .expiredFocus: return "Focus request expired while offline. Please try again."
       case .rejected(let status, let detail): return "Argon refused that (\(status)). \(detail)"
       case .server(let status, _): return "Argon had an error (\(status))."
       }
@@ -161,6 +161,20 @@ actor ArgonClient {
       _ = try await request("v1/tasks/\(id)", method: "PATCH", body: ["done": true])
     case .move(let id, let due):
       _ = try await request("v1/tasks/\(id)", method: "PATCH", body: ["due": due])
+    case .focus(let id):
+      do {
+        _ = try await request("v2/focus", method: "POST", body: ["task_id": id],
+                              idempotencyKey: key)
+      } catch Failure.rejected(status: 404, detail: let detail) where detail.contains("Not Found") {
+        // Older servers support partial planner updates; omit start_at to preserve it.
+        let (current, _) = try await state()
+        guard current.tasks.contains(where: { $0.id == id && !$0.done }) else {
+          throw Failure.rejected(status: 404, detail: "That task is no longer open.")
+        }
+        let focus = Array(([id] + (current.planner?.focus ?? []).filter { $0 != id }).prefix(100))
+        _ = try await request("v1/planner", method: "POST", body: ["focus": focus],
+                              idempotencyKey: key)
+      }
     case .add(let title, let due):
       var body: [String: Any] = ["title": title]
       if let due { body["due"] = due }

@@ -148,12 +148,14 @@ struct ArgonTodayView: View {
       Button("Low energy") {
         replan("I'm low on energy. Adjust tonight's focus and start time to a manageable plan, using my tasks and calendar. Don't ask me to fill in a form.")
       }
-      Button("Nap for an hour") { nap() }
-      if store.state.tonight.contains(where: { !$0.isLocal && !$0.isStarted && $0.id != nextTask?.id }) {
+      Button("Take 30 minutes") { takeBreak(minutes: 30) }
+      Button("Nap for an hour") { takeBreak(minutes: 60) }
+      if store.state.sortedTasks.contains(where: { !$0.isLocal && !$0.isStarted && $0.id != nextTask?.id }) {
         Menu("Choose another task") {
-          ForEach(store.state.tonight.filter { !$0.isLocal && !$0.isStarted && $0.id != nextTask?.id }) { task in
+          ForEach(store.state.sortedTasks.filter { !$0.isLocal && !$0.isStarted && $0.id != nextTask?.id }) { task in
             Button(task.title) {
-              replan("Make task ID \(task.id) my next focus tonight. Keep its real due date unchanged and confirm briefly.")
+              adjustmentResult = nil
+              Task { await store.chooseNext(task) }
             }
           }
         }
@@ -176,8 +178,8 @@ struct ArgonTodayView: View {
     Task { await store.rest(until: until) }
   }
 
-  private func nap() {
-    let seconds = ceil((Date().timeIntervalSince1970 + 3600) / 60) * 60
+  private func takeBreak(minutes: Int) {
+    let seconds = ceil((Date().timeIntervalSince1970 + Double(minutes * 60)) / 60) * 60
     let until = Date(timeIntervalSince1970: seconds)
     ArgonLockReconciler.restLocally(until: until, context: context)
     restTimestamp = seconds

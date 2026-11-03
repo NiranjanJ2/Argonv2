@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-11-02
+
+- Refined Today with a monochrome design and a quieter dot pattern.
+- Made choosing any open task as the next focus immediate, with offline
+  retry and compatibility with older servers; added a 30-minute break.
+- Kept break warnings quiet across refreshes and stopped stale offline focus
+  choices from changing the next day's plan.
+
 ## 2026-10-28
 
 - Reworked Today as a blueprint sheet with an explicit next action, capacity

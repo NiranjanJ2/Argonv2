@@ -24,12 +24,17 @@ enum ArgonRoutineScheduler {
   private static let log = Logger(subsystem: "com.niranjanj.argon", category: "routine")
   private static let defaults = UserDefaults.standard
   private static let appliedKey = "argon.routine.applied"
+  private static let warningsKey = "argon.routine.warnings"
   private static let warningPrefix = "argon.routine.warning."
 
   static func suppressWarnings() {
     UNUserNotificationCenter.current().removePendingNotificationRequests(
       withIdentifiers: (0..<7).map { "\(warningPrefix)\($0)" })
-    defaults.removeObject(forKey: appliedKey)
+    defaults.removeObject(forKey: warningsKey)
+  }
+
+  static func shouldScheduleWarnings(saved: String?, fingerprint: String, overrideActive: Bool) -> Bool {
+    !overrideActive && saved != fingerprint
   }
 
   /// Rewrite the schedule only when it actually changed.
@@ -41,7 +46,10 @@ enum ArgonRoutineScheduler {
     ArgonRoutineSettings.save(schoolNights: routine.schoolNights)
 
     let fingerprint = routine.fingerprint(profile: profileId.uuidString)
-    guard defaults.string(forKey: appliedKey) != fingerprint else { return }
+    if defaults.string(forKey: appliedKey) == fingerprint {
+      scheduleWarningsIfNeeded(routine, fingerprint: fingerprint)
+      return
+    }
 
     guard let start = routine.startMinutes, let end = routine.endMinutes else {
       ArgonLog.note("routine", "server sent a start that is not HH:MM: \(routine.startAt)")
@@ -61,7 +69,7 @@ enum ArgonRoutineScheduler {
     do {
       try center.startMonitoring(name, during: schedule)
       defaults.set(fingerprint, forKey: appliedKey)
-      scheduleWarnings(routine)
+      scheduleWarningsIfNeeded(routine, fingerprint: fingerprint)
       ArgonLog.note("routine", "armed \(routine.startAt) +\(routine.windowMinutes)m"
                     + (routine.chosen ? "" : " (default)"))
     } catch {
@@ -70,6 +78,13 @@ enum ArgonRoutineScheduler {
       log.error("could not arm: \(error.localizedDescription, privacy: .public)")
       ArgonLog.note("routine", "arm failed: \(error.localizedDescription)")
     }
+  }
+
+  private static func scheduleWarningsIfNeeded(_ routine: ArgonRoutine, fingerprint: String) {
+    guard shouldScheduleWarnings(saved: defaults.string(forKey: warningsKey),
+                                 fingerprint: fingerprint, overrideActive: ArgonOverride.isActive) else { return }
+    scheduleWarnings(routine)
+    defaults.set(fingerprint, forKey: warningsKey)
   }
 
   /// The heads-up before the block, one weekly notification per school night.

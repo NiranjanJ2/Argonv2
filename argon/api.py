@@ -343,6 +343,33 @@ def create_app(rt) -> Flask:
             return jsonify({"error": "task is not running"}), 409
         return remember({"task": task_json(task)}, 200)
 
+    @app.post("/v2/focus")
+    @require_token
+    def v2_focus():
+        """Make one open task the next focus; the others keep their order behind it.
+
+        Goes through planner.apply's `focus` list, so no due date or start time
+        moves (a Classroom date would be put back by the sync anyway). Like any
+        submission to apply, it records today as planned.
+        """
+        from argon import planner
+
+        if cached := replay():
+            return cached
+        raw = body().get("task_id")
+        if isinstance(raw, bool) or not isinstance(raw, (str, int)) or not str(raw).strip():
+            return jsonify({"error": "task_id required"}), 400
+        task_id = str(raw).strip()
+        task = rt.store.task(task_id)
+        if task is None:
+            return jsonify({"error": "no such task"}), 404
+        if task.done:
+            return jsonify({"error": "task is already done"}), 409
+        # Only still-open ids carry over; apply drops finished ones itself.
+        order = [task.id] + [i for i in planner.focus(rt.store) if i != task.id]
+        planner.apply(rt, {"focus": order[:planner.MAX_ITEMS]})
+        return remember({"task": task_json(task), "focus": planner.focus(rt.store)}, 200)
+
     @app.post("/v2/resume")
     @require_token
     def v2_resume():
@@ -896,6 +923,30 @@ def _selftest() -> None:
         version = rt.store.lock_record()["version"]
         assert c.post(f"/v2/tasks/{focus_task.id}/extend", json={}, headers=extend_headers).status_code == 200
         assert rt.store.lock_record()["version"] == version, "retry must not extend twice"
+
+        # Selecting focus puts the task first, keeps the others, moves no dates.
+        fa = rt.store.add_task("Focus A", due="2026-09-20")
+        fb = rt.store.add_task("Focus B", due="2026-09-21")
+        fdone = rt.store.add_task("Focus done")
+        rt.store.complete_task(fdone.id, by="him")
+        planner.apply(rt, {"focus": [fa.id]})
+        start_before = planner.start_time(rt.store)
+        r = c.post("/v2/focus", json={"task_id": fb.id}, headers=auth)
+        assert r.status_code == 200 and r.get_json()["focus"] == [fb.id, fa.id]
+        assert c.post("/v2/focus", json={"task_id": fa.id}, headers=auth).get_json()["focus"] == [fa.id, fb.id]
+        assert (rt.store.task(fa.id).due, rt.store.task(fb.id).due) == ("2026-09-20", "2026-09-21")
+        assert planner.start_time(rt.store) == start_before
+        for bad, code in (({}, 400), ({"task_id": ""}, 400), ({"task_id": True}, 400),
+                          ({"task_id": {"a": 1}}, 400), ({"task_id": "nope"}, 404),
+                          ({"task_id": fdone.id}, 409)):
+            assert c.post("/v2/focus", json=bad, headers=auth).status_code == code, bad
+        assert planner.focus(rt.store) == [fa.id, fb.id], "rejected requests change nothing"
+        assert c.post("/v2/focus", json={"task_id": fa.id}).status_code == 401
+        focus_headers = {**auth, "Idempotency-Key": "focus-once"}
+        assert c.post("/v2/focus", json={"task_id": fb.id}, headers=focus_headers).status_code == 200
+        assert c.post("/v2/focus", json={"task_id": fa.id}, headers=auth).status_code == 200
+        assert c.post("/v2/focus", json={"task_id": fb.id}, headers=focus_headers).status_code == 200
+        assert planner.focus(rt.store) == [fa.id, fb.id], "replayed request must not undo a later choice"
 
         # Unauthenticated routing errors must not reach the transcript: the
         # handler runs before auth, and the transcript is the model's context.

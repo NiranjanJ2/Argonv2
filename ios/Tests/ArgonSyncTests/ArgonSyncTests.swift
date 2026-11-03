@@ -59,6 +59,45 @@ private let stateJSON = """
 // MARK: - the outbox
 
 final class OutboxTests: XCTestCase {
+  func testYesterdayFocusChoiceDoesNotChangeTodaysPlan() async throws {
+    StubProtocol.reset()
+    let client = ArgonClient(base: URL(string: "http://stub")!, token: "t", session: StubProtocol.session)
+    let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: Date())!
+    do {
+      try await client.apply(PendingWrite(.focus(taskID: "a"), created: yesterday))
+      XCTFail("A previous day's focus must not be applied today")
+    } catch let error as ArgonClient.Failure {
+      XCTAssertEqual(error, .expiredFocus)
+    }
+    XCTAssertTrue(StubProtocol.seen.isEmpty)
+  }
+  func testChoosingNextWorksWithOlderServersWithoutChangingStart() async throws {
+    StubProtocol.reset()
+    var submitted: [String: Any] = [:]
+    StubProtocol.handler = { request in
+      if request.url!.path == "/v2/focus" { return (404, Data(#"{"error":"Not Found"}"#.utf8)) }
+      if request.url!.path == "/v2/state" {
+        return (200, Data(#"{"tasks":[{"id":"a","title":"A"},{"id":"b","title":"B"}],"planner":{"focus":["a"]}}"#.utf8))
+      }
+      let data = request.httpBody ?? request.httpBodyStream.map(readAll) ?? Data()
+      submitted = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+      return (200, Data(#"{"focus":["B","A"]}"#.utf8))
+    }
+    let client = ArgonClient(base: URL(string: "http://stub")!, token: "t", session: StubProtocol.session)
+    try await client.apply(PendingWrite(.focus(taskID: "b")))
+    XCTAssertEqual(submitted["focus"] as? [String], ["b", "a"])
+    XCTAssertNil(submitted["start_at"])
+    XCTAssertEqual(StubProtocol.seen, ["POST /v2/focus", "GET /v2/state", "POST /v1/planner"])
+  }
+
+  func testMissingTaskDoesNotFallBackToPlanner() async {
+    StubProtocol.reset()
+    StubProtocol.handler = { _ in (404, Data(#"{"error":"no such task"}"#.utf8)) }
+    let client = ArgonClient(base: URL(string: "http://stub")!, token: "t", session: StubProtocol.session)
+    do { try await client.apply(PendingWrite(.focus(taskID: "missing"))); XCTFail("Expected rejection") }
+    catch { XCTAssertEqual(StubProtocol.seen, ["POST /v2/focus"]) }
+  }
+
   func testReleaseScopeIsBackwardCompatible() throws {
     let old = try JSONDecoder().decode(ArgonState.self, from: Data(#"{"release":{"until":"2026-10-29T07:00:00Z","version":1}}"#.utf8))
     let scoped = try JSONDecoder().decode(ArgonState.self, from: Data(#"{"release":{"until":"2026-10-29T07:00:00Z","version":2,"scope":"argon"}}"#.utf8))
@@ -235,6 +274,22 @@ final class StoreTests: XCTestCase {
     XCTAssertEqual(store.pendingCount, 1)
     XCTAssertFalse(store.awaitingReply)
     XCTAssertLessThan(Date().timeIntervalSince(started), 5)
+  }
+
+  func testChoosingNextUpdatesImmediatelyAndQueuesOffline() async {
+    StubProtocol.handler = { request in
+      if request.httpMethod == "POST" { return (503, Data()) }
+      if request.url!.path.contains("state") {
+        return (200, Data(#"{"tasks":[{"id":"a","title":"A"},{"id":"b","title":"B"}],"planner":{"focus":["a"]}}"#.utf8))
+      }
+      return (200, Data(#"{"messages":[],"unread":0}"#.utf8))
+    }
+    let store = makeStore(label: "choose-next-offline")
+    await store.refresh()
+    let task = store.state.tasks.first { $0.id == "b" }!
+    await store.chooseNext(task)
+    XCTAssertEqual(store.state.planner?.focus, ["b", "a"])
+    XCTAssertEqual(store.pendingCount, 1)
   }
 
   func testCancellingReplyWaitStopsPolling() async throws {

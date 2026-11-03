@@ -3,6 +3,13 @@ import XCTest
 @testable import foqos
 
 final class ArgonLockDecisionTests: XCTestCase {
+  @MainActor
+  func testWarningsStayQuietDuringBreakAndReturnAfterward() {
+    XCTAssertFalse(ArgonRoutineScheduler.shouldScheduleWarnings(saved: nil, fingerprint: "today", overrideActive: true))
+    XCTAssertTrue(ArgonRoutineScheduler.shouldScheduleWarnings(saved: nil, fingerprint: "today", overrideActive: false))
+    XCTAssertFalse(ArgonRoutineScheduler.shouldScheduleWarnings(saved: "today", fingerprint: "today", overrideActive: false))
+    XCTAssertTrue(ArgonRoutineScheduler.shouldScheduleWarnings(saved: "yesterday", fingerprint: "today", overrideActive: false))
+  }
   func testHoldingSessionIdentityProtectsOtherSessions() {
     XCTAssertTrue(ArgonRoutineSettings.isHoldingSession(recorded: "holding", active: "holding"))
     XCTAssertFalse(ArgonRoutineSettings.isHoldingSession(recorded: "holding", active: "manual"))
