@@ -32,9 +32,9 @@ struct ArgonTodayView: View {
           .draftRow(.single, stroke: Argon.overdue.opacity(0.45),
                     fill: Argon.overdue.opacity(0.10))
       }
-      briefRows
       runningRows
       nextStepRows
+      briefRows
       boardRows
       overdueRows
       futureRows
@@ -106,6 +106,7 @@ struct ArgonTodayView: View {
           }
           .foregroundStyle(Argon.Ink.base)
           .background(Argon.Tone.primary)
+          .clipShape(RoundedRectangle(cornerRadius: 10))
           adjustmentMenu
         }
         .font(Argon.detail.weight(.medium)).buttonStyle(.plain)
@@ -148,11 +149,20 @@ struct ArgonTodayView: View {
         replan("I'm low on energy. Adjust tonight's focus and start time to a manageable plan, using my tasks and calendar. Don't ask me to fill in a form.")
       }
       Button("Nap for an hour") { nap() }
+      if store.state.tonight.contains(where: { !$0.isLocal && !$0.isStarted && $0.id != nextTask?.id }) {
+        Menu("Choose another task") {
+          ForEach(store.state.tonight.filter { !$0.isLocal && !$0.isStarted && $0.id != nextTask?.id }) { task in
+            Button(task.title) {
+              replan("Make task ID \(task.id) my next focus tonight. Keep its real due date unchanged and confirm briefly.")
+            }
+          }
+        }
+      }
       Button("Not tonight") { restTonight() }
       Button("Full plan", action: adjustPlan)
     } label: {
       Text("Adjust").frame(minWidth: 82, minHeight: 44)
-        .overlay(Rectangle().strokeBorder(Argon.lineStrong, lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Argon.lineStrong, lineWidth: 1))
     }
     .foregroundStyle(Argon.Tone.secondary)
     .disabled(replanning)
@@ -296,17 +306,18 @@ struct ArgonTodayView: View {
           .font(Argon.body).foregroundStyle(Argon.Tone.primary)
           .focused($addFocused).submitLabel(.done).onSubmit(commit)
       } else {
-        Text("Add a task").font(Argon.body).foregroundStyle(Argon.accent)
-        Spacer()
+        Button {
+          adding = true
+          addFocused = true
+        } label: {
+          Text("Add a task").font(Argon.body).foregroundStyle(Argon.accent)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
       }
     }
-    .padding(.vertical, 12)
-    .contentShape(Rectangle())
-    .onTapGesture {
-      guard !adding else { return }
-      adding = true
-      addFocused = true
-    }
+    .padding(.vertical, adding ? 12 : 0)
   }
 
   /// Late work, folded behind a count. Every row red on the main board made

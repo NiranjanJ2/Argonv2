@@ -237,6 +237,25 @@ final class StoreTests: XCTestCase {
     XCTAssertLessThan(Date().timeIntervalSince(started), 5)
   }
 
+  func testCancellingReplyWaitStopsPolling() async throws {
+    StubProtocol.handler = { request in
+      if request.httpMethod == "POST" { return (200, Data(#"{"reply":"","spoke":true}"#.utf8)) }
+      if request.url!.path.contains("state") { return (200, Data(stateJSON.utf8)) }
+      return (200, Data(#"{"messages":[],"unread":0}"#.utf8))
+    }
+    let store = makeStore(label: "cancel-reply")
+    let task = Task { await store.send("Adjust my plan") }
+    for _ in 0..<100 where !store.awaitingReply {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    XCTAssertTrue(store.awaitingReply)
+    let cancelledAt = Date()
+    task.cancel()
+    await task.value
+    XCTAssertFalse(store.awaitingReply)
+    XCTAssertLessThan(Date().timeIntervalSince(cancelledAt), 2)
+  }
+
   /// Asserts the screen changes *before* the round trip. The previous version
   /// of this test passed with the entire optimistic-write feature deleted.
   func testCompletingATaskShowsImmediately() async {

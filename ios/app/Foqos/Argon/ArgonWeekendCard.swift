@@ -23,7 +23,7 @@ struct ArgonWeekendCard: View {
   private var isOn: Bool { bridge.desiredMode == "weekend" }
 
   var body: some View {
-    ArgonGlass {
+    ArgonGlass(surface: Argon.Ink.raised) {
       VStack(alignment: .leading, spacing: 12) {
         Toggle(isOn: Binding(get: { isOn },
                              set: { on in set(on ? "weekend" : "off") })) {

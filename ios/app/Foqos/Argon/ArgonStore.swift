@@ -220,7 +220,8 @@ final class ArgonStore {
     defer { awaitingReply = false }
     let deadline = Date().addingTimeInterval(replyWindow)
     while Date() < deadline {
-      try? await Task.sleep(for: .milliseconds(1200))
+      do { try await Task.sleep(for: .milliseconds(1200)) }
+      catch { return }
       await refreshMessagesOnly()
       if messages.filter({ $0.isFromArgon }).count > count { return }
     }

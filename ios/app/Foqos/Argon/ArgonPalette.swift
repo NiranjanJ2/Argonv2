@@ -58,7 +58,7 @@ struct ArgonBackdrop: View {
   var accentColor = ArgonPalette.electricBlue
 
   var body: some View {
-    ArgonPalette.canvas.ignoresSafeArea()
+    ArgonDotField().ignoresSafeArea()
   }
 }
 
@@ -81,10 +81,11 @@ struct ArgonInsetGlow: ViewModifier {
 
   func body(content: Content) -> some View {
     content
-      .background(isActive ? tint.opacity(inset > 3 ? 0.20 : 0.10) : Color.clear)
+      .background(isActive ? tint.opacity(inset > 3 ? 0.20 : 0.10) : Argon.Ink.slate,
+                  in: RoundedRectangle(cornerRadius: cornerRadius))
       .overlay(
-        DraftFrame(overshoot: 6)
-          .stroke(isActive ? tint.opacity(0.7) : Argon.line, lineWidth: 1)
+        RoundedRectangle(cornerRadius: cornerRadius)
+          .stroke(isActive ? tint.opacity(0.35) : .clear, lineWidth: 1)
           .allowsHitTesting(false)
       )
       .animation(.easeOut(duration: 0.16), value: isActive)

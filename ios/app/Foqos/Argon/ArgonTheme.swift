@@ -1,72 +1,57 @@
 import SwiftUI
 
-/// A blueprint sheet: blue ground, white type, and fine construction lines.
-///
-/// **The one bold thing is the linework.** Boxes are outlines, not fills, and
-/// their edges run a few points past the corners like construction lines on a
-/// technical drawing (`DraftFrame`). Everything else stays quiet so that reads.
-///
-/// **Blue carries all the colour.** Things to press, today, a task running.
-/// There is no green.
-///
-/// **Red is a tint, never a fill.** Soft red text on a faint red wash — late
-/// work and failures only.
-///
-/// **No decoration.** No gradients, shadows, blur or glow. Square corners.
-///
-/// **Type is Dynamic Type.** Titles use SF Pro's expanded width, which has the
-/// flat, even set of drawing-sheet lettering; everything else is plain SF Pro.
+/// A quiet monochrome surface, with SF typography and a subtle dot grid.
 enum Argon {
 
   // MARK: ground
 
   enum Ink {
-    static let base = Color(red: 0.035, green: 0.18, blue: 0.36)
+    static let base = Color(white: 0.035)
     static let deep = base
     /// A barely-there fill, for the few places a surface must read as pressed.
-    static let slate = Color(red: 0.055, green: 0.22, blue: 0.42)
-    static let raised = Color(red: 0.075, green: 0.26, blue: 0.47)
+    static let slate = Color(white: 0.085)
+    static let raised = Color(white: 0.13)
   }
 
   enum Tone {
     static let primary = Color.white
-    static let secondary = Color(red: 0.78, green: 0.86, blue: 0.94)
+    static let secondary = Color(white: 0.75)
     /// 4.5:1 on the ground — subject lines, empty states.
-    static let faint = Color(red: 0.68, green: 0.79, blue: 0.90)
+    static let faint = Color(white: 0.65)
   }
 
   /// Construction lines: the box edges and the rules between rows.
-  static let line = Color(red: 0.38, green: 0.57, blue: 0.73)
+  static let line = Color(white: 0.18)
   /// A box edge he should notice — the brief, the running task.
-  static let lineStrong = Color(red: 0.68, green: 0.81, blue: 0.91)
+  static let lineStrong = Color(white: 0.28)
 
-  static let accent = Color(red: 0.72, green: 0.88, blue: 1.0)
+  static let accent = Color.white
   static let accentSoft = accent
   static let accentDeep = accent
 
   /// A task running. Blue, not green.
   static let running = accent
   /// Late work and failures. Only ever shown over its own tint.
-  static let overdue = Color(red: 0.910, green: 0.455, blue: 0.431)     // #E8746E
+  static let overdue = Color(white: 0.85)
 
   static let hairline = line
   static let hairlineBright = lineStrong
 
   /// How far a construction line runs past the corner it draws.
-  static let overshoot: CGFloat = 9
+  static let overshoot: CGFloat = 0
   /// The gap between the screen edge and a box's vertical lines.
   static let margin: CGFloat = 18
 
   // MARK: type — all Dynamic Type
 
-  static let screenTitle = Font.largeTitle.weight(.semibold).width(.expanded)
+  static let screenTitle = Font.largeTitle.weight(.semibold)
   static let cardTitle = Font.headline
   static let heading = Font.headline
   static let body = Font.body
   static let detail = Font.subheadline
   static let label = Font.footnote
   /// Section names: small, wide, quiet. Sentence case — never tracked capitals.
-  static let caption = Font.footnote.weight(.medium).width(.expanded)
+  static let caption = Font.footnote.weight(.medium)
   static let mono = Font.footnote.monospacedDigit()
 }
 
@@ -74,20 +59,34 @@ extension View {
   /// The screen's ground.
   func argonAmbience() -> some View {
     background {
-      ZStack {
-        Argon.Ink.base
-        Canvas { context, size in
-          var grid = Path()
-          stride(from: 0.0, through: size.width, by: 24).forEach { x in
-            grid.move(to: CGPoint(x: x, y: 0)); grid.addLine(to: CGPoint(x: x, y: size.height))
-          }
-          stride(from: 0.0, through: size.height, by: 24).forEach { y in
-            grid.move(to: CGPoint(x: 0, y: y)); grid.addLine(to: CGPoint(x: size.width, y: y))
-          }
-          context.stroke(grid, with: .color(.white.opacity(0.055)), lineWidth: 0.5)
-        }.allowsHitTesting(false)
-      }.ignoresSafeArea()
+      ArgonDotField().ignoresSafeArea()
     }
+  }
+}
+
+struct ArgonDotField: View {
+  var body: some View {
+    Canvas { context, size in
+      context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(Argon.Ink.base))
+      var dots = Path()
+      let spacing: CGFloat = 15
+      stride(from: 0.0, through: size.height + spacing, by: spacing).forEach { y in
+        let progress = y / max(size.height, 1)
+        let center = size.width * (1.08 - 0.20 * sin(progress * .pi))
+        let strength = max(0, min(1, (progress - 0.48) * 3))
+        stride(from: -spacing, through: size.width + spacing, by: spacing).forEach { x in
+          let distance = (x - center) / max(size.width * 0.35, 1)
+          let wave = exp(-distance * distance * 2) * strength
+          let diameter = 0.6 + 3.2 * wave
+          let shift = sin(progress * .pi * 2) * 6
+          dots.addEllipse(in: CGRect(x: x + shift - diameter / 2, y: y - diameter / 2,
+                                     width: diameter, height: diameter))
+        }
+      }
+      context.fill(dots, with: .color(.white.opacity(0.18)))
+    }
+    .allowsHitTesting(false)
+    .accessibilityHidden(true)
   }
 }
 
@@ -103,8 +102,11 @@ struct DraftFrame: Shape {
   var edges: Edge.Set = .all
 
   func path(in r: CGRect) -> Path {
+    if edges == .all {
+      return RoundedRectangle(cornerRadius: 12).path(in: r)
+    }
     var p = Path()
-    let o = overshoot
+    let o: CGFloat = 0
     if edges.contains(.top) {
       p.move(to: CGPoint(x: r.minX - o, y: r.minY)); p.addLine(to: CGPoint(x: r.maxX + o, y: r.minY))
     }
@@ -153,30 +155,19 @@ struct DraftRowBackground: View {
       let box = CGRect(x: m, y: position.opens ? o : 0,
                        width: g.size.width - 2 * m,
                        height: g.size.height - (position.opens ? o : 0) - (position.closes ? o : 0))
-      ZStack {
-        Rectangle().fill(fill).frame(width: box.width, height: box.height)
-          .position(x: box.midX, y: box.midY)
-        Path { p in
-          // sides, extended past the box only where the box ends
-          let top = position.opens ? 0 : box.minY
-          let bottom = position.closes ? g.size.height : box.maxY
-          p.move(to: CGPoint(x: box.minX, y: top)); p.addLine(to: CGPoint(x: box.minX, y: bottom))
-          p.move(to: CGPoint(x: box.maxX, y: top)); p.addLine(to: CGPoint(x: box.maxX, y: bottom))
-          if position.opens {
-            p.move(to: CGPoint(x: box.minX - o, y: box.minY))
-            p.addLine(to: CGPoint(x: box.maxX + o, y: box.minY))
-          }
-          if position.closes {
-            p.move(to: CGPoint(x: box.minX - o, y: box.maxY))
-            p.addLine(to: CGPoint(x: box.maxX + o, y: box.maxY))
-          } else {
-            // the rule between rows stays inside the box
-            p.move(to: CGPoint(x: box.minX, y: box.maxY))
-            p.addLine(to: CGPoint(x: box.maxX, y: box.maxY))
+      UnevenRoundedRectangle(
+        topLeadingRadius: position.opens ? 16 : 0,
+        bottomLeadingRadius: position.closes ? 16 : 0,
+        bottomTrailingRadius: position.closes ? 16 : 0,
+        topTrailingRadius: position.opens ? 16 : 0)
+        .fill(fill == .clear ? Argon.Ink.slate : fill)
+        .overlay(alignment: .bottom) {
+          if !position.closes {
+            Rectangle().fill(stroke.opacity(0.65)).frame(height: 0.5).padding(.leading, 14)
           }
         }
-        .stroke(stroke, lineWidth: 1)
-      }
+        .frame(width: box.width, height: box.height)
+        .position(x: box.midX, y: box.midY)
     }
   }
 }
@@ -208,13 +199,14 @@ extension View {
 struct ArgonGlass<Content: View>: View {
   var padding: CGFloat = 16
   var stroke: Color = Argon.line
+  var surface: Color = Argon.Ink.slate
   @ViewBuilder var content: Content
 
   var body: some View {
     content
       .padding(padding)
       .frame(maxWidth: .infinity, alignment: .leading)
-      .overlay(DraftFrame().stroke(stroke, lineWidth: 1))
+      .background(surface, in: RoundedRectangle(cornerRadius: 16))
       .padding(Argon.overshoot)   // room for the overshoot, inside our frame
   }
 }
@@ -275,11 +267,10 @@ struct ArgonButtonStyle: ButtonStyle {
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
       .font(Argon.body.weight(.medium))
-      .foregroundStyle(Argon.accent)
+      .foregroundStyle(prominent ? Argon.Ink.base : Argon.Tone.primary)
       .frame(maxWidth: .infinity, minHeight: 48)
-      .background(prominent ? Argon.accent.opacity(configuration.isPressed ? 0.22 : 0.12)
-                            : Color.clear)
-      .overlay(DraftFrame(overshoot: 6).stroke(Argon.accent.opacity(0.7), lineWidth: 1))
-      .padding(6)
+      .background(prominent ? Argon.accent.opacity(configuration.isPressed ? 0.75 : 1)
+                            : Argon.Ink.slate, in: RoundedRectangle(cornerRadius: 12))
+      .overlay(RoundedRectangle(cornerRadius: 12).stroke(Argon.lineStrong, lineWidth: 1))
   }
 }
